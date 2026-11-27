@@ -29,10 +29,11 @@ def test_named_snapshots_commit_before_return_and_restore_independently(tmp_path
     workdir = str(tmp_path)
     legacy = get_or_create_session(12, "local", 10, workdir)
     child = get_or_create_session(12, "local", 10, workdir, agent_id="reviewer")
-    first, second = [
-        create_web_chat_session(12, "local", 10, workdir, title)
-        for title in ["调查日志", "Review"]
-    ]
+    custom_path = str(tmp_path / "private-install" / "codex")
+    first = create_web_chat_session(
+        12, "local", 10, workdir, "调查日志", selected_cli_type="codex_server", selected_cli_path=custom_path,
+    )
+    second = create_web_chat_session(12, "local", 10, workdir, "Review")
     assert re.fullmatch(r"ses_[0-9a-f]{32}", first.web_session_id)
     assert first.web_session_id != second.web_session_id
     assert legacy.web_session_id == child.web_session_id == ""
@@ -45,6 +46,7 @@ def test_named_snapshots_commit_before_return_and_restore_independently(tmp_path
     else:
         initial_payload = json.loads(session_store.STORE_FILE.read_text())[key]
     assert initial_payload["web_session_title"] == "调查日志"
+    assert (initial_payload["selected_cli_type"], initial_payload["selected_cli_path"]) == ("codex_server", custom_path)
     with pytest.raises(AttributeError):
         first.web_session_id = second.web_session_id
     with pytest.raises(ValueError):
@@ -77,7 +79,8 @@ def test_named_snapshots_commit_before_return_and_restore_independently(tmp_path
     assert {row["id"]: row["title"] for row in rows} == {
         first.web_session_id: "调查日志", second.web_session_id: "Review",
     }
-    assert all(set(row) == {"id", "title"} for row in rows)
+    assert next(row for row in rows if row["id"] == first.web_session_id)["selected_cli_type"] == "codex_server"
+    assert all("selected_cli_path" not in row for row in rows)
     with ThreadPoolExecutor(max_workers=4) as pool:
         restored = list(pool.map(lambda _: get_web_chat_session(12, "local", 22, workdir, first.web_session_id), range(8)))
     assert all(item is restored[0] for item in restored)
@@ -87,6 +90,8 @@ def test_named_snapshots_commit_before_return_and_restore_independently(tmp_path
         assert session.agent_id == "main"
         assert session.storage_scope == "@" + original.web_session_id
         assert session.web_session_title == original.web_session_title
+        assert session.selected_cli_type == original.selected_cli_type
+        assert session.selected_cli_path == original.selected_cli_path
         assert session.codex_session_id == f"codex-{index}"
         assert session.claude_session_id == f"claude-{index}"
         assert session.antigravity_conversation_id == f"agy-{index}"
@@ -175,6 +180,32 @@ def test_json_to_sqlite_migration_keeps_named_and_legacy_bindings(tmp_path, monk
     assert get_web_chat_session(41, "bot", 20, workdir, session.web_session_id).codex_session_id == "new-thread"
     assert get_or_create_session(41, "bot", 20, workdir).codex_session_id == "old-thread"
     assert session_store.session_store_diagnostics()["active_backend"] == "sqlite"
+
+
+@pytest.mark.parametrize("backend", ["json", "sqlite"])
+def test_rename_retry_combines_existing_transcript_with_its_pinned_tool(tmp_path, monkeypatch, backend):
+    monkeypatch.setenv("SESSION_STORE_BACKEND", backend)
+    workspace = str(tmp_path)
+    source = create_web_chat_session(
+        11, "old", 1, workspace, "Review", selected_cli_type="claude", selected_cli_path="/private/claude",
+    )
+    # An existing copy of the same chat at the destination has newer conversation state.
+    assert session_store.insert_web_session_snapshot(
+        22, source.user_id, source.web_session_id, workspace, "Review", bot_alias="new",
+    )
+    dest = get_web_chat_session(22, "new", 1, workspace, source.web_session_id)
+    dest.message_count = 9
+    dest.claude_session_id = "review-thread"
+    dest.persist()
+    session_store.rename_bot_sessions(11, 22, old_alias="old", new_alias="new")
+    rekey_bot_sessions(11, 22, old_alias="old", new_alias="new")
+    for cold in (False, True):
+        if cold:
+            unload_bot_sessions("new")
+            session_store.close_session_store()
+        restored = get_web_chat_session(22, "new", 1, workspace, source.web_session_id)
+        assert (restored.selected_cli_type, restored.selected_cli_path) == ("claude", "/private/claude")
+        assert restored.claude_session_id == "review-thread"
 
 
 def test_failed_creation_preserves_existing_json_and_publishes_no_session(tmp_path, monkeypatch):

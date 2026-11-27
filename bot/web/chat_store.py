@@ -1960,6 +1960,31 @@ class ChatStore:
                 (normalized_session_id or None, meta_json, now, conversation_id),
             )
 
+    def record_legacy_deepseek_provider(
+        self, *, bot_id: int, bot_alias: str, user_id: int, working_dir: str,
+        agent_id: str, provider: str | None,
+    ) -> None:
+        """Identify existing unlabeled native threads before changing this Bot's provider."""
+        conn = self._connect(create=False)
+        if conn is None:
+            return
+        with closing(conn), conn:
+            conn.execute(
+                """
+                UPDATE conversations
+                SET native_session_meta_json = json_insert(
+                    COALESCE(native_session_meta_json, '{}'), '$.deepseek_provider', ?
+                )
+                WHERE bot_id = ? AND bot_alias = ? AND user_id = ? AND working_dir = ?
+                  AND (agent_id = 'main' OR agent_id GLOB '@ses_*' OR agent_id = ?)
+                  AND COALESCE(cluster_parent_conversation_id, '') = ''
+                  AND cli_type = 'deepseek' AND native_provider = 'deepseek'
+                  AND COALESCE(native_session_id, '') != ''
+                  AND json_type(native_session_meta_json, '$.deepseek_provider') IS NULL
+                """,
+                (provider, bot_id, bot_alias, user_id, working_dir, agent_id),
+            )
+
     def list_conversations(
         self,
         *,

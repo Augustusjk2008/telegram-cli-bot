@@ -30,7 +30,7 @@
 ## Sessions, history and frontend events
 
 - Sessions keep the `(bot_id, shared_user_id, agent_id)` isolation; `deepseek_session_id` is stored by `bot/models.py`, `bot/sessions.py` and `bot/session_store.py`. Only the ID returned by the Harness is used to continue a chat, and the first call of a new session omits `--session-id`.
-- History, trace and usage are persisted by the project's `ChatStore`; `bot/web/chat_history_service.py` restores the binding from the provider session ID of the selected conversation. DeepSeek history recovery does not scan external CLI session directories.
+- History, trace and usage are persisted by the project's `ChatStore`. New Harness bindings record the configured DeepSeek provider in conversation metadata. A change to that provider starts a fresh native thread on the next turn. Changing the model under the same provider keeps the thread. Existing conversations without this metadata use their saved native ID. Before Orbit changes the configured provider, it labels those legacy threads with the previous provider so cold restores can check compatibility. DeepSeek history recovery does not scan external CLI session directories.
 - The frontend CLI transcript displays the trace and keeps the legacy SSE `meta/status/trace/done` with the top-level `turn_id` and `assistant_message_id`; the incremental body is in `status.preview_text`.
 - Failures, stops and output over the limit should keep the body received so far, complete the turn once and release the processing state; a failure must never replay the user's task automatically.
 

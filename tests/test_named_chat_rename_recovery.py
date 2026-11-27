@@ -32,7 +32,10 @@ def _seed(tmp_path, aliases=("worker",), *, directory_permissions=False):
     manager = _open_manager(path, grants)
     grants.set_bot_owner(old, "owner", grant_owner=True)
     old_id = resolve_session_bot_id(manager, old)
-    session = sessions.create_web_chat_session(old_id, old, 1, str(tmp_path), "保存的对话")
+    session = sessions.create_web_chat_session(
+        old_id, old, 1, str(tmp_path), "保存的对话", selected_cli_type="codex",
+        selected_cli_path=str(tmp_path / "private-codex"),
+    )
     history = ChatHistoryService(ChatStore(tmp_path))
     handle = history.start_turn(profile=manager.get_profile(old), session=session, user_text="question", native_provider="codex")
     history.complete_turn(handle, content="answer", completion_state="completed", native_session_id="native-code")
@@ -59,6 +62,7 @@ def _assert_recovered(manager, path, grants, session_id, handle):
     new_id = resolve_session_bot_id(manager, "renamed")
     restored = sessions.get_web_chat_session(new_id, "renamed", 1, str(path.parent), session_id)
     assert (restored.web_session_title, restored.codex_session_id) == ("保存的对话", "native-code")
+    assert (restored.selected_cli_type, restored.selected_cli_path) == ("codex", str(path.parent / "private-codex"))
     assert restored.active_conversation_id == handle.conversation_id
     assert ChatStore(path.parent).get_conversation(handle.conversation_id)["bot_alias"] == "renamed"
     favorites = ChatFavoriteStore(path.parent).list_favorites(

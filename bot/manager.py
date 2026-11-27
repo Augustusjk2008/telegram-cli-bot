@@ -21,7 +21,9 @@ from bot.chat_rename import ChatRenamePending, has_legacy_collision, migrate_cha
 from bot.cli_params import (
     CliParamsConfig,
     coerce_param_value,
+    get_default_params,
     normalize_deepseek_selection,
+    normalize_deepseek_value,
 )
 from bot.cluster.config import normalize_bot_cluster_config
 from bot.config import BOT_ALIAS_RE, CLI_TYPE, RESERVED_ALIASES, WORKING_DIR, _DOTENV_VALUES
@@ -61,6 +63,10 @@ def _clear_deepseek_session_binding(alias: str, user_id: int, agent_id: str) -> 
         if session.storage_scope != normalized_agent_id:
             continue
         with session._lock:
+            if session.is_processing or session._lifecycle_operation:
+                # An admitted turn owns its thread until completion. The next turn
+                # checks the provider stored with the conversation before resuming.
+                return False
             had_binding = bool(session.deepseek_session_id)
             session.deepseek_session_id = None
         if had_binding:
@@ -95,13 +101,15 @@ def _clear_deepseek_session_binding(alias: str, user_id: int, agent_id: str) -> 
 
 
 async def _close_codex_server_runtimes(
-    alias: str, *, require_idle: bool = True, named_only: bool = False,
+    alias: str, *, require_idle: bool = True, named_only: bool = False, following_bot_cli_only: bool = False,
 ) -> None:
     from bot.codex_server.runtime import get_codex_server_registry
     from bot.sessions import get_bot_sessions
     targets = get_bot_sessions(alias)
     if named_only:
         targets = [session for session in targets if session.web_session_id]
+    if following_bot_cli_only:
+        targets = [session for session in targets if session.selected_cli_type is None]
     if require_idle:
         for session in targets:
             with session._lock:
@@ -583,7 +591,7 @@ class MultiBotManager:
                     f"(请在设置页填写可执行名或完整路径，例如 Windows 可能需要 claude.cmd)"
                 )
             if profile.cli_type != resolved_cli_type or profile.cli_path != resolved_cli_path:
-                await _close_codex_server_runtimes(normalized_alias)
+                await _close_codex_server_runtimes(normalized_alias, following_bot_cli_only=True)
             profile.cli_type = resolved_cli_type
             profile.cli_path = resolved_cli_path
             if normalized_alias == self.main_profile.alias:
@@ -715,12 +723,34 @@ class MultiBotManager:
                 return profile.cli_params.get_params(cli_type)
             return profile.cli_params.to_dict()
 
+    async def _record_deepseek_provider_change(
+        self, profile: BotProfile, next_provider: str | None, *, agent_id: str = "main",
+    ) -> bool:
+        from bot.web.api_common import resolve_session_bot_id
+        from bot.web.chat_store import ChatStore
+
+        previous = normalize_deepseek_value(profile.cli_params.get_param("deepseek", "provider"))
+        if previous == next_provider:
+            return False
+        if profile.remote_workspace:
+            return True
+        # Commit the old identity first. If history is unavailable the profile
+        # still has its previous provider, and retrying the update is safe.
+        await asyncio.to_thread(
+            ChatStore(profile.working_dir).record_legacy_deepseek_provider,
+            bot_id=resolve_session_bot_id(self, profile.alias), bot_alias=profile.alias,
+            user_id=chat_session_user_id(), working_dir=profile.working_dir, agent_id=agent_id, provider=previous,
+        )
+        return True
+
     async def set_bot_cli_param(self, alias: str, cli_type: str, key: str, value) -> None:
         normalized_alias = str(alias or "").strip().lower()
         normalized_cli_type = str(cli_type or "").strip().lower()
         async with self._lock:
             profile = self._get_profile_for_update(normalized_alias)
             coerced_value = coerce_param_value(normalized_cli_type, key, value)
+            if normalized_cli_type == "deepseek" and key == "provider":
+                await self._record_deepseek_provider_change(profile, coerced_value)
             profile.cli_params.set_param(normalized_cli_type, key, coerced_value)
             if normalized_alias == self.main_profile.alias:
                 self._persist_main_profile()
@@ -744,13 +774,12 @@ class MultiBotManager:
         """Persist a DeepSeek provider/model/effort selection atomically."""
         normalized_alias = str(alias or "").strip().lower()
         normalized_agent_id = str(agent_id or "main").strip().lower() or "main"
+        if normalized_agent_id.startswith("@"):
+            raise ValueError("此设置仅接受 Bot 的 agent ID")
         requested = normalize_deepseek_selection(provider, model, reasoning_effort)
 
         async with self._lock:
             profile = self._get_profile_for_update(normalized_alias)
-            if str(profile.cli_type or "").strip().lower() != "deepseek":
-                raise ValueError("只有 DeepSeek Bot 支持 provider 选择")
-
             current_params = profile.cli_params.get_params("deepseek")
             current = normalize_deepseek_selection(
                 provider=current_params.get("provider"),
@@ -801,15 +830,17 @@ class MultiBotManager:
                     f"DeepSeek 思考深度 `{requested['reasoning_effort']}` 不属于 provider `{selected_provider or 'default'}`"
                 )
 
+            provider_changed = await self._record_deepseek_provider_change(
+                profile, selected_provider, agent_id=normalized_agent_id,
+            )
             profile.cli_params.deepseek.update(requested)
             if normalized_alias == self.main_profile.alias:
                 self._persist_main_profile()
             else:
                 self._save_profiles()
 
-            provider_changed = current["provider"] != requested["provider"]
             session_invalidated = False
-            if provider_changed and user_id is not None:
+            if provider_changed and user_id is not None and profile.cli_type == "deepseek":
                 session_invalidated = _clear_deepseek_session_binding(
                     normalized_alias,
                     user_id,
@@ -826,6 +857,8 @@ class MultiBotManager:
         normalized_alias = str(alias or "").strip().lower()
         async with self._lock:
             profile = self._get_profile_for_update(normalized_alias)
+            if cli_type is None or cli_type.strip().lower() == "deepseek":
+                await self._record_deepseek_provider_change(profile, get_default_params("deepseek")["provider"])
             profile.cli_params.reset_to_default(cli_type)
             if normalized_alias == self.main_profile.alias:
                 self._persist_main_profile()

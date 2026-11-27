@@ -6,6 +6,7 @@ import { DEFAULT_CHAT_TYPOGRAPHY, isChatTypography, normalizeChatTypography } fr
 import { isThemeMaterial, normalizeThemeMaterial } from "../theme/material";
 import { normalizeIllustrations } from "../theme/resolveAppearance";
 import {
+  CLI_TYPES,
   GIT_CAPABILITY_NAMES,
   GENERAL_CLAUDE_RATE_LIMIT_ID,
   GENERAL_CODEX_RATE_LIMIT_ID,
@@ -432,6 +433,28 @@ function defaultCliPathForType(cliType: string) {
 }
 
 function buildMockCliParams(cliType: string): CliParamsPayload {
+  if (cliType === "claude") {
+    const defaults = {
+      model: null, effort: "max", yolo: false, disable_prompts: true, stream_json: true, session_id: null, extra_args: [],
+    };
+    return {
+      cliType,
+      defaults,
+      params: { ...defaults, model: "claude-opus-4-7" },
+      schema: {
+        model: {
+          type: "string", description: "模型选择", nullable: true,
+          enum: MOCK_CLI_MODEL_OPTIONS.filter((id) => id === "none" || id.startsWith("claude-")),
+        },
+        effort: { type: "string", description: "努力程度", enum: ["max", "xhigh", "high", "medium", "low"] },
+        yolo: { type: "boolean", description: "跳过权限确认" },
+        disable_prompts: { type: "boolean", description: "禁用交互式提示" },
+        stream_json: { type: "boolean", description: "启用 stream-json 流式输出" },
+        session_id: { type: "string", description: "会话 ID", nullable: true },
+        extra_args: { type: "string_list", description: "额外参数" },
+      },
+    };
+  }
   if (cliType === "deepseek") {
     const providerOptions = [
       {
@@ -527,7 +550,7 @@ function buildMockCliParams(cliType: string): CliParamsPayload {
     };
   }
   return {
-    cliType: cliType === "claude" || cliType === "codex_server" ? cliType : "codex",
+    cliType: cliType === "codex_server" ? cliType : "codex",
     params: {
       reasoning_effort: "xhigh",
       model: "gpt-5.4",
@@ -646,9 +669,9 @@ function buildMockGitCommitMessageConfig(cliType: CliType, cliPath?: string): Gi
 /** Mirrors the backend: one entry per CLI, without the output-format switch the host controls. */
 function buildMockTranslationCliOptions(): ChatTranslationConfig["cli_options"] {
   const options: ChatTranslationConfig["cli_options"] = {};
-  for (const cliType of ["codex", "codex_server", "claude", "antigravity", "deepseek"] as const) {
+  for (const cliType of CLI_TYPES) {
     const { params, defaults, schema } = buildMockCliParams(cliType);
-    const { json_output: _hostControlled, ...visibleSchema } = schema;
+    const { json_output, stream_json, session_id, ...visibleSchema } = schema;
     options[cliType] = { params: { ...params }, defaults: { ...defaults }, schema: visibleSchema };
   }
   return options;
@@ -2164,10 +2187,11 @@ export class MockWebBotClient implements WebBotClient {
       },
     ]),
   );
-  private readonly namedSessions = new Map<string, ChatSessionSummary[]>();
+  private readonly namedSessions = new Map<string, { id: string; title: string; selectedCliType: CliType | null }[]>();
   private readonly chatSessionClients = new Map<string, WebBotClient>();
   private readonly chatRuns = new Map<string, Map<string, AbortController>>();
   private chatSessionId = "main";
+  private selectedCliType: CliType | null = null;
   private chatMessages = mockChatMessages;
   private namedConversationMessages?: Map<string, ChatMessage[]>;
 
@@ -2179,30 +2203,46 @@ export class MockWebBotClient implements WebBotClient {
 
   async listChatSessions(botAlias: string): Promise<ChatSessionList> {
     const enabled = this.chatSessionsEnabled(botAlias);
+    const defaultCli = this.bots.get(botAlias)!.cliType;
     const named = enabled ? this.namedSessions.get(botAlias) || [] : [];
-    return { enabled, items: [{ id: "main", title: "主会话" }, ...named.map((item) => ({ ...item }))] };
+    return {
+      enabled,
+      cliOptions: enabled ? CLI_TYPES.map((cliType) => ({ cliType, available: true })) : [],
+      items: [
+        { id: "main", title: "主会话", selectedCliType: null, effectiveCliType: defaultCli },
+        ...named.map((item) => ({ ...item, effectiveCliType: item.selectedCliType ?? defaultCli })),
+      ],
+    };
   }
 
-  async createChatSession(botAlias: string, title: string): Promise<ChatSessionSummary> {
+  async createChatSession(botAlias: string, title: string, cliType?: CliType): Promise<ChatSessionSummary> {
     if (!this.chatSessionsEnabled(botAlias)) {
       throw new WebApiClientError("独立聊天会话仅支持本地工作区", { status: 409, code: "local_chat_sessions_unavailable" });
+    }
+    if (!this.effectiveCapabilitiesForBot(botAlias).includes("chat_send")) {
+      throw new WebApiClientError("无权创建聊天会话", { status: 403, code: "forbidden" });
+    }
+    if (cliType !== undefined && !CLI_TYPES.includes(cliType)) {
+      throw new WebApiClientError("未知的 AI 工具", { status: 400, code: "invalid_cli_type" });
     }
     const name = title.trim();
     if (!name || Array.from(name).length > 80) {
       throw new WebApiClientError("会话名称须为 1 至 80 个字符", { status: 400, code: "invalid_session_title" });
     }
-    const item = { id: `ses_${mockChatId()}`, title: name };
+    const item = { id: `ses_${mockChatId()}`, title: name, selectedCliType: cliType ?? null };
     this.namedSessions.set(botAlias, [...(this.namedSessions.get(botAlias) || []), item]);
-    return { ...item };
+    return { ...item, effectiveCliType: cliType ?? this.bots.get(botAlias)!.cliType };
   }
 
   forChatSession(botAlias: string, sessionId: string): WebBotClient {
     return bindChatSession(this, this.chatSessionClients, botAlias, sessionId, () => {
-      if (!this.namedSessions.get(botAlias)?.some((item) => item.id === sessionId)) {
+      const item = this.namedSessions.get(botAlias)?.find((item) => item.id === sessionId);
+      if (!item) {
         throw new WebApiClientError("聊天会话不存在", { status: 404, code: "session_not_found" });
       }
       const chat = Object.create(this) as this;
       chat.chatSessionId = sessionId;
+      chat.selectedCliType = item.selectedCliType;
       chat.chatMessages = {};
       chat.namedConversationMessages = new Map();
       chat.conversationsByBot = new Map();
@@ -4897,13 +4937,22 @@ export class MockWebBotClient implements WebBotClient {
     return { cluster, status: await this.getClusterStatus(botAlias) };
   }
 
-  async getBotOverview(botAlias: string, options: AgentScopedOptions = {}): Promise<BotOverview> {
+  private getChatBotSummary(botAlias: string) {
     const bot = this.getBotSummary(botAlias);
+    if (this.chatSessionId !== "main") {
+      bot.cliType = this.selectedCliType ?? bot.cliType;
+      delete bot.cliPath;
+      delete bot.cluster;
+    }
+    return bot;
+  }
+
+  async getBotOverview(botAlias: string, options: AgentScopedOptions = {}): Promise<BotOverview> {
+    const bot = this.getChatBotSummary(botAlias);
     const agentId = options.agentId || "main";
     const messages = this.getAgentMessages(bot.alias, agentId);
     return {
       ...bot,
-      cliPath: bot.cliPath,
       enabled: bot.enabled,
       isMain: bot.isMain,
       messageCount: messages.length,
@@ -4911,7 +4960,6 @@ export class MockWebBotClient implements WebBotClient {
       isProcessing: this.chatRuns.get(botAlias)?.has(this.chatRunKey(agentId)) || false,
       ...(this.chatSessionId !== "main" ? {
         activeConversationId: this.activeConversationByBot.get(this.getConversationKey(botAlias, agentId)) || "",
-        cluster: bot.cluster && { ...bot.cluster, enabled: false },
       } : {}),
       agents: this.ensureAgents(botAlias)
         .filter((agent) => this.chatSessionId === "main" || agent.id === "main")
@@ -4920,7 +4968,7 @@ export class MockWebBotClient implements WebBotClient {
       busyAgentIds: [],
       executionMode: options.executionMode || bot.executionMode || "cli",
       globalPromptPresets: clonePromptPresets(this.globalPromptPresets),
-      voice: { enabled: false, reason: "disabled" },
+      voice: { enabled: false, reason: this.chatSessionId !== "main" || bot.cliType === "deepseek" ? "unsupported_cli" : "disabled" },
     };
   }
 
@@ -4946,7 +4994,7 @@ export class MockWebBotClient implements WebBotClient {
       status: "active",
       botAlias,
       agentId,
-      cliType: this.getBotSummary(botAlias).cliType,
+      cliType: this.getChatBotSummary(botAlias).cliType,
       workingDir: this.getBotSummary(botAlias).workingDir,
       ...(agentId === "main" && this.chatSessionId === "main" ? {
         clusterTeam: readMockChatScript()?.clusterTeam ?? { version: 1, assignments: [] },
@@ -4973,7 +5021,7 @@ export class MockWebBotClient implements WebBotClient {
     const agentId = options.agentId || "main";
     const key = this.getConversationKey(botAlias, agentId);
     const now = new Date().toISOString();
-    const bot = this.getBotSummary(botAlias);
+    const bot = this.getChatBotSummary(botAlias);
     const conversation: ConversationSummary = {
       id: this.namedConversationMessages ? mockChatId() : `mock-conv-${Date.now()}`,
       title: title.trim() || "新会话",
@@ -8608,7 +8656,23 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async getCliParams(botAlias: string, cliType?: CliType): Promise<CliParamsPayload> {
-    return this.getCliParamsForType(botAlias, cliType || this.getBotSummary(botAlias).cliType);
+    return this.getCliParamsForType(botAlias, this.settingsCliType(botAlias, cliType));
+  }
+
+  private settingsCliType(botAlias: string, requested?: string): CliType {
+    const effective = this.selectedCliType ?? this.getBotSummary(botAlias).cliType;
+    if (this.chatSessionId !== "main") {
+      if (!this.isLocalAdminSession() && this.session.role !== "member") {
+        throw new WebApiClientError("权限不足", { status: 403, code: "forbidden" });
+      }
+      if (!this.canOperateBot(botAlias)) {
+        throw new WebApiClientError("无权访问该 Bot", { status: 403, code: "bot_forbidden" });
+      }
+      if (requested && requested !== effective) {
+        throw new WebApiClientError("此配置与聊天会话的 AI 工具不匹配", { status: 409, code: "session_cli_mismatch" });
+      }
+    }
+    return (requested || effective) as CliType;
   }
 
   private getCliParamsForType(botAlias: string, cliType: CliType): CliParamsPayload {
@@ -8623,7 +8687,11 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async updateCliParam(botAlias: string, key: string, value: unknown, cliType?: string): Promise<CliParamsPayload> {
-    const payload = this.getCliParamsForType(botAlias, (cliType || this.getBotSummary(botAlias).cliType) as CliType);
+    const kind = this.settingsCliType(botAlias, cliType);
+    if (this.chatSessionId !== "main" && kind === "deepseek") {
+      throw new WebApiClientError("请使用该聊天工具的模型和思考深度设置", { status: 400, code: "invalid_chat_cli_param" });
+    }
+    const payload = this.getCliParamsForType(botAlias, kind);
     const nextValue = key === "model" && value === "none" ? null : value;
     const next = {
       ...payload,
@@ -8640,7 +8708,8 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async updateDeepSeekSelection(botAlias: string, selection: DeepSeekSelectionRequest): Promise<DeepSeekSelectionResponse> {
-    const payload = this.getCliParamsForType(botAlias, "deepseek");
+    this.checkChatAgent(selection.agentId);
+    const payload = this.getCliParamsForType(botAlias, this.settingsCliType(botAlias, "deepseek"));
     const currentProvider = String(payload.selectedProvider || payload.params.provider || "").trim();
     const nextProvider = String(selection.provider || "").trim();
     const effectiveNextProvider = nextProvider || currentProvider;

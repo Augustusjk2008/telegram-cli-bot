@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -10,6 +11,8 @@ from aiohttp.streams import EMPTY_PAYLOAD, StreamReader
 from aiohttp.test_utils import make_mocked_request
 
 from bot.manager import MultiBotManager
+from bot import config, session_store
+from bot.chat_identity import chat_session_user_id
 from bot.models import BotProfile
 from bot.web import api_common, api_service, chat_targets, server as server_module
 from bot.web.auth_store import (
@@ -109,8 +112,11 @@ async def test_authorization_precedes_session_lookup(api, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_catalog_validates_body_and_refuses_unknown_sessions(api):
-    for body in ([], {}, {"title": 5}, {"title": "  "}, {"title": "x", "working_dir": "/elsewhere"},
-                 {"title": "x", "cli_type": "claude"}, {"title": "x", "id": "picked"}):
+    for body in ([], {}, {"title": 5}, {"title": "  "},
+                 *({"title": "x", "cli_type": kind} for kind in ["unknown", "", None, {}, 3]),
+                 *({"title": "x", "cli_type": "codex", field: "injected"} for field in [
+                     "working_dir", "cli_path", "extra_args", "cli_params", "id", "session_id", "selected_cli_path",
+                 ])):
         assert (await dispatch(api, "POST", SESSIONS, body=body)).status == 400
     listed = await data(api, "GET", SESSIONS, token="reader")
     assert listed["enabled"] and [item["id"] for item in listed["items"]] == ["main"]
@@ -121,10 +127,147 @@ async def test_catalog_validates_body_and_refuses_unknown_sessions(api):
 
 
 @pytest.mark.asyncio
+async def test_local_catalog_pins_only_the_selected_tool_and_trusted_custom_path(api, tmp_path, monkeypatch):
+    manager = api.server.manager
+    profile = manager.main_profile
+    profile.cli_type = "codex"
+    profile.cli_path = str(tmp_path / "private-codex")
+    profile.cluster = replace(profile.cluster, enabled=True)
+    commands = {"codex": "codex", "codex_server": "codex", "claude": "claude", "antigravity": "agy", "deepseek": "dsh"}
+    monkeypatch.setattr(config, "default_cli_path", commands.__getitem__)
+    available = {profile.cli_path, "claude", "agy", "dsh"}
+    monkeypatch.setattr(chat_targets, "resolve_cli_executable", lambda command, _: command if command in available else None)
+    catalog = await data(api, "GET", SESSIONS, token="reader")
+    assert catalog["cli_options"] == [{"cli_type": kind, "available": True} for kind in commands]
+    assert catalog["items"] == [{"id": "main", "title": "主会话", "selected_cli_type": None, "effective_cli_type": "codex"}]
+    assert (await dispatch(api, "POST", SESSIONS, body={"title": "Denied", "cli_type": "claude"}, token="reader")).status == 403
+    available.remove(profile.cli_path)
+    denied = await dispatch(api, "POST", SESSIONS, body={"title": "Gone", "cli_type": "codex_server"})
+    assert denied.status == 409 and "private-codex" not in denied.text
+    assert (await data(api, "GET", SESSIONS))["items"] == catalog["items"]
+    available.add(profile.cli_path)
+    inherited = await data(api, "POST", SESSIONS, body={"title": "Old client"})
+    pinned = {}
+    for kind in commands:
+        profile.cli_params.set_param(kind, "extra_args", [f"private-{kind}-arg"])
+        item = await data(api, "POST", SESSIONS, body={"title": kind, "cli_type": kind})
+        assert item == {"id": item["id"], "title": kind, "selected_cli_type": kind, "effective_cli_type": kind}
+        pinned[kind] = item
+    profile.cli_type, profile.cli_path = "antigravity", "agy"
+    catalog = await data(api, "GET", SESSIONS)
+    assert "private-" not in json.dumps(catalog)
+    assert catalog["items"][0]["effective_cli_type"] == "antigravity"
+    assert {**inherited, "effective_cli_type": "antigravity"} in catalog["items"]
+    assert chat_targets.resolve_named_chat_target(manager, "main", 101, inherited["id"]).profile.cli_type == "antigravity"
+    for kind, item in pinned.items():
+        assert item in catalog["items"]
+        target = chat_targets.resolve_named_chat_target(manager, "main", 101, item["id"])
+        assert target.profile.cli_type == kind
+        assert target.profile.cli_path == (str(tmp_path / "private-codex") if kind.startswith("codex") else commands[kind])
+        assert target.agent.id == "main" and not target.profile.cluster.enabled
+        assert target.profile.cli_params.get_param(kind, "extra_args") == [f"private-{kind}-arg"]
+        profile.cli_params.get_param(kind, "extra_args").append("later")
+        assert target.profile.cli_params.get_param(kind, "extra_args") == [f"private-{kind}-arg"]
+        new_target = chat_targets.resolve_named_chat_target(manager, "main", 101, item["id"])
+        assert new_target.profile.cli_params.get_param(kind, "extra_args")[-1] == "later"
+    assert profile.cluster.enabled
+
+    available.remove("dsh")
+    response = await dispatch(api, "POST", SESSIONS, body={"title": "Gone", "cli_type": "deepseek"})
+    assert (response.status, json.loads(response.text)["error"]["code"]) == (409, "chat_cli_unavailable")
+    after = await data(api, "GET", SESSIONS)
+    assert after["items"] == catalog["items"]
+    assert {"cli_type": "deepseek", "available": False} in after["cli_options"]
+    target = chat_targets.resolve_named_chat_target(manager, "main", 101, pinned["deepseek"]["id"])
+    with pytest.raises(api_common.WebApiError) as unavailable:
+        await api_service.run_chat(manager, "main", 101, "hello", target=target)
+    assert unavailable.value.code == "chat_cli_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_steer_uses_the_requesters_capability(api, monkeypatch):
+    item = await data(api, "POST", SESSIONS, body={"title": "Steer"})
+    steer = AsyncMock(return_value={"status": "accepted"})
+    monkeypatch.setattr(server_module, "steer_chat", steer)
+    endpoint = f"{SESSIONS}/{item['id']}/chat/steer"
+    body = {"turn_id": "turn", "message": "continue", "allow_unsafe_cli": True}
+    await data(api, "POST", endpoint, body=body)
+    assert steer.await_args.kwargs["allow_unsafe_cli"] is False
+    assert (await dispatch(api, "POST", endpoint, body=body, token="reader")).status == 403
+    assert steer.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_named_controls_discover_and_validate_against_the_pinned_installation(api, tmp_path, monkeypatch):
+    private = tmp_path / "custom-harness"
+    private.touch()
+    profile = api.server.manager.main_profile
+    profile.cli_type, profile.cli_path = "deepseek", str(private)
+    profile.cli_params.deepseek["extra_args"] = ["--patch", "private-host-patch"]
+    item = await data(api, "POST", SESSIONS, body={"title": "Harness", "cli_type": "deepseek"})
+    profile.cli_type, profile.cli_path = "codex", "codex"
+    calls = []
+
+    def discover(resolved_cli, working_dir, params):
+        calls.append(resolved_cli)
+        return {"providers": [{"id": "custom", "modelOptions": ["custom-model"]}],
+                "status": "ready", "diagnostic": str(private)}
+
+    monkeypatch.setattr(api_service, "discover_deepseek_catalog", discover)
+    path = f"{SESSIONS}/{item['id']}/cli-params"
+    payload = await data(api, "GET", path)
+    assert payload["model_options_by_provider"] == {"custom": ["custom-model"]}
+    selection = {"provider": "custom", "model": "custom-model"}
+    updated = await data(api, "PATCH", path, body={"cli_type": "deepseek", "selection": selection})
+    assert updated["params"]["provider"] == profile.cli_params.deepseek["provider"] == "custom"
+    assert calls and set(calls) == {str(private)}
+    for result in (payload, updated):
+        assert "cli_path" not in result and "private-host-patch" not in json.dumps(result)
+        assert str(private) not in json.dumps(result)
+        assert set(result["schema"]) <= {"model", "provider", "reasoning_effort"}
+    for method, url, body in (("GET", path + "?cli_type=claude", None),
+                              ("PATCH", path, {"cli_type": "claude", "key": "model", "value": "other"}),
+                              ("PATCH", path, {"key": "extra_args", "value": ["x"]})):
+        refused = await dispatch(api, method, url, body=body)
+        assert refused.status in {400, 409}
+    assert (await dispatch(api, "GET", path, token="outsider")).status == 403
+
+
+@pytest.mark.asyncio
+async def test_remote_bot_cannot_list_local_tools_or_create_pins(api, monkeypatch):
+    api.server.manager.main_profile.remote_workspace = {"host": "remote.example"}
+    monkeypatch.setattr(chat_targets, "resolve_cli_executable", Mock(side_effect=AssertionError("local lookup")))
+    listed = await data(api, "GET", SESSIONS)
+    assert not listed["enabled"] and listed["cli_options"] == []
+    for body in ({"title": "Remote"}, {"title": "Remote", "cli_type": "claude"}):
+        response = await dispatch(api, "POST", SESSIONS, body=body)
+        assert (response.status, json.loads(response.text)["error"]["code"]) == (409, "local_chat_sessions_unavailable")
+
+
+@pytest.mark.asyncio
+async def test_corrupt_stored_cli_does_not_fall_back_or_leak_snapshot_data(api):
+    manager = api.server.manager
+    session_id = "ses_" + "1" * 32
+    bot_id = api_common.resolve_session_bot_id(manager, "main")
+    key = f"{bot_id}:{chat_session_user_id()}:@{session_id}"
+    session_store.save_session_ids({key: {
+        "bot_alias": "main", "web_session_id": session_id, "web_session_title": "Broken",
+        "selected_cli_type": {"private-key": "/private/executable"},
+    }})
+    listed = await data(api, "GET", SESSIONS)
+    assert "private" not in json.dumps(listed)
+    assert any(row["id"] == session_id for row in listed["items"])
+    response = await dispatch(api, "POST", SESSIONS + "/" + session_id + "/chat", body={"message": "test"})
+    assert (response.status, json.loads(response.text)["error"]["code"]) == (409, "invalid_session_cli")
+    assert "private" not in response.text
+
+
+@pytest.mark.asyncio
 async def test_path_selects_session_for_mutation_and_subsequent_reads(api):
     first = await data(api, "POST", SESSIONS, body={"title": "First"})
     second = await data(api, "POST", SESSIONS, body={"title": "Second"})
-    assert first.keys() == second.keys() == {"id", "title"}
+    assert first.keys() == second.keys() == {"id", "title", "selected_cli_type", "effective_cli_type"}
+    assert first["selected_cli_type"] is None and first["effective_cli_type"] == api.server.manager.main_profile.cli_type
     listed = await data(api, "GET", SESSIONS, token="reader")
     assert first in listed["items"] and second in listed["items"]
 

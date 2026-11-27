@@ -1157,6 +1157,47 @@ class _DeepSeekProcess(_UsageProcess):
         return self.returncode
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("kind", "stopped"), [
+    ("deepseek", False), ("antigravity", False), ("claude", False), ("codex", False), ("codex", True),
+])
+async def test_named_failure_keeps_provider_diagnostics_out_of_messages_and_traces(usage_manager, tmp_path, monkeypatch, kind, stopped):
+    from bot.web.chat_targets import create_chat_session, resolve_named_chat_target
+
+    profile = usage_manager.main_profile
+    exe = tmp_path / f"custom-{kind}"
+    exe.touch()
+    profile.cli_type, profile.cli_path = kind, str(exe)
+    item = create_chat_session(usage_manager, "main", 1, "Test", cli_type=kind)
+    target = resolve_named_chat_target(usage_manager, "main", 1, item["id"])
+    diagnostic = "missing /private/settings.patch with access_token=private-credential"
+    stdout = {
+        "deepseek": [{"type": "text", "text": "partial"}, {"type": "error", "message": diagnostic}],
+        "antigravity": [{"event": "result", "result": {"status": "ERROR", "error": diagnostic}}],
+        "claude": [{"type": "assistant", "error": "authentication_failed",
+                    "message": {"content": [{"type": "text", "text": diagnostic}]}}],
+        "codex": [{"type": "error" if stopped else "turn.failed", "error": {"message": diagnostic}}],
+    }[kind]
+    process = _DeepSeekProcess(stdout, returncode=0 if stopped or kind == "claude" else 1, stderr=diagnostic)
+    monkeypatch.setattr(api_service, "build_cli_command", lambda **kwargs: ([str(exe)], False))
+    monkeypatch.setattr(api_service, "_start_codex_rate_limit_capture", AsyncMock(return_value=None))
+    monkeypatch.setattr(api_service, "_start_claude_rate_limit_capture", AsyncMock(return_value=None))
+    monkeypatch.setattr(api_service.subprocess, "Popen", lambda *args, **kwargs: process)
+    events = []
+    async for event in api_service.stream_chat(usage_manager, "main", 1, "hello", target=target):
+        events.append(event)
+        if stopped and event["type"] == "meta":
+            target.session.stop_requested = True
+    done = events[-1]
+    assert done["message"]["meta"]["completion_state"] == ("cancelled" if stopped else "error")
+    if kind == "deepseek":
+        assert "partial" in done["output"]
+    history = api_service.get_history(usage_manager, "main", 1, target=target)
+    trace = api_service.get_history_trace(usage_manager, "main", 1, done["assistant_message_id"], target=target)
+    public = json.dumps([events, history, trace])
+    assert "private-credential" not in public and "settings.patch" not in public and str(exe) not in public
+
+
 def _deepseek_events(session_id="session-dsh", text="最终回复"):
     return [
         {"type": "session", "sessionId": session_id},
@@ -1170,6 +1211,29 @@ def _deepseek_events(session_id="session-dsh", text="最终回复"):
         {"type": "status", "phase": "turn_end", "turn": 1, "reason": {"kind": "completed"}},
         {"type": "final", "text": text},
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("kind", "flag"), [("codex", "json_output"), ("claude", "stream_json")])
+async def test_named_plain_reply_preserves_literal_json_and_separates_stderr(usage_manager, tmp_path, monkeypatch, kind, flag):
+    from bot.web.chat_targets import create_chat_session, resolve_named_chat_target
+
+    profile = usage_manager.main_profile
+    exe = tmp_path / kind
+    exe.touch()
+    profile.cli_type, profile.cli_path = kind, str(exe)
+    profile.cli_params.set_param(kind, flag, False)
+    item = create_chat_session(usage_manager, "main", 1, "Plain", cli_type=kind)
+    target = resolve_named_chat_target(usage_manager, "main", 1, item["id"])
+    literal = '{"answer":42,"type":"error","message":"example JSON"}'
+    process = _DeepSeekProcess([literal], stderr="private startup diagnostic")
+    monkeypatch.setattr(api_service.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(api_service, "_start_codex_rate_limit_capture", AsyncMock(return_value=None))
+    monkeypatch.setattr(api_service, "_start_claude_rate_limit_capture", AsyncMock(return_value=None))
+    events = await _collect_stream_events(api_service.stream_chat(usage_manager, "main", 1, "Return JSON", target=target))
+    assert events[-1]["output"] == literal
+    assert events[-1]["message"]["meta"]["completion_state"] == "completed"
+    assert "private startup diagnostic" not in json.dumps(events)
 
 
 def test_deepseek_context_usage_keeps_projection_without_turn_usage():
@@ -1460,6 +1524,50 @@ async def test_deepseek_failure_never_succeeds_or_replays(usage_manager, monkeyp
         assert stderr.strip() in done["output"]
     assert len(observed["commands"]) == len(observed["completions"]) == 1
     assert done["session"]["is_processing"] is False
+
+
+@pytest.mark.asyncio
+async def test_deepseek_provider_change_during_preparation_keeps_launch_and_binding_together(usage_manager, monkeypatch):
+    from bot.web.chat_targets import create_chat_session, resolve_named_chat_target
+
+    _patch_deepseek_runtime(usage_manager, monkeypatch, [
+        _DeepSeekProcess(_deepseek_events(thread)) for thread in ("thread-a", "thread-a", "thread-b", "thread-b")
+    ])
+    usage_manager.main_profile.cli_params.set_param("deepseek", "provider", "a")
+    launch = []
+    entered, resume = asyncio.Event(), asyncio.Event()
+    prepare = api_service.prepare_chat_input
+
+    async def preparing(**kwargs):
+        if kwargs["text"] == "first":
+            entered.set()
+            await resume.wait()
+        return await prepare(**kwargs)
+
+    def command(**kwargs):
+        launch.append((kwargs["params_config"].deepseek["provider"], kwargs["session_id"]))
+        return ["dsh"], True
+
+    monkeypatch.setattr(api_service, "prepare_chat_input", preparing)
+    monkeypatch.setattr(api_service, "build_cli_command", command)
+    monkeypatch.setattr(api_service, "_deepseek_catalog_invocation", lambda *_: ({"providers": ["a", "b"]}, ""))
+    await api_service.run_chat(usage_manager, "main", 1001, "seed")
+    item = create_chat_session(usage_manager, "main", 1001, "Settings")
+    settings = resolve_named_chat_target(usage_manager, "main", 1001, item["id"])
+    first = asyncio.create_task(api_service.run_chat(usage_manager, "main", 1001, "first"))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        await api_service.update_deepseek_selection(usage_manager, "main", 1001, provider="b", target=settings)
+    finally:
+        resume.set()
+        await asyncio.wait_for(first, 5)
+    session = api_service.get_session_for_alias(usage_manager, "main", 1001)
+    store = api_service._get_chat_store(session)
+    binding = store.get_conversation_native_session(session.active_conversation_id)
+    assert binding == {"session_id": "thread-a", "meta": {"deepseek_provider": "a"}}
+    await api_service.run_chat(usage_manager, "main", 1001, "second")
+    await api_service.run_chat(usage_manager, "main", 1001, "third")
+    assert launch == [("a", None), ("a", "thread-a"), ("b", None), ("b", "thread-b")]
 
 
 @pytest.mark.asyncio

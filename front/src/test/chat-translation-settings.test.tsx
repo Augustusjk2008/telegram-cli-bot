@@ -14,7 +14,7 @@ test("translation settings save their own CLI type, path and parameters", async 
   await user.selectOptions(screen.getByLabelText("CLI 类型"), "claude");
   // Switching the type offers that CLI's command and parameters before anything is saved.
   expect(screen.getByLabelText("CLI 路径")).toHaveValue("claude");
-  await user.selectOptions(screen.getByLabelText("推理努力程度"), "low");
+  await user.selectOptions(screen.getByLabelText("努力程度"), "low");
   await user.selectOptions(screen.getByLabelText("模型选择"), "none");
   await user.click(screen.getByRole("button", { name: "保存聊天翻译配置" }));
 
@@ -24,7 +24,7 @@ test("translation settings save their own CLI type, path and parameters", async 
     method: "cli",
     cli_type: "claude",
     cli_path: "claude",
-    cli_params: { reasoning_effort: "low", model: null },
+    cli_params: { effort: "low", model: null },
   }));
   expect(await client.getChatTranslationConfig()).toMatchObject({ method: "cli", cli_type: "claude", cli_path: "claude" });
   expect(screen.getByRole("button", { name: "保存聊天翻译配置" })).toBeDisabled();

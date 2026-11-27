@@ -217,6 +217,19 @@ export const TUTORIAL_CHAPTERS: TutorialChapter[] = [
         zoom: 1.2,
         alt: "新增智能体表单：别名 team3、CLI 类型、CLI 路径、位置和工作目录",
       },
+      {
+        id: "chat-tool",
+        title: "选择聊天工具",
+        body: [
+          "在本地智能体的聊天窗口顶部打开会话选择器，选择「新建聊天会话」。输入名称并选择这段聊天使用的 AI 工具。",
+          "例如，用 Codex 写代码，再创建一个用 Claude 的「代码审查」会话。两者共享工作区，各自保留记录和原生线程。",
+          "以后从选择器切回会话，名称旁会显示它的工具。标有「Bot 默认」的会话跟随智能体当前的工具。",
+        ],
+        shot: "chat-tool",
+        hotspot: "dialog",
+        zoom: 1.5,
+        alt: "新建聊天会话窗口，名称为代码审查，AI 工具选中了 claude",
+      },
     ],
   },
   {

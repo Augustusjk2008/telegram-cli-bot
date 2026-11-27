@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import pytest
 
+from bot.chat_identity import chat_session_user_id
 from bot.cli_params import CliParamsConfig, normalize_deepseek_selection
 from bot.manager import MultiBotManager
 from bot.models import BotProfile, UserSession
+from bot.sessions import create_web_chat_session, unload_bot_sessions
 from bot.web import api_service
-from bot.web.api_common import WebApiError
+from bot.web.api_common import WebApiError, resolve_session_bot_id
 from bot.web.api_service import build_cluster_cli_params_override, get_cli_params_payload
+from bot.web.chat_store import ChatStore
+from bot.web.chat_targets import resolve_named_chat_target
 
 
 def _manager_with_deepseek(tmp_path, alias: str = "worker") -> MultiBotManager:
@@ -178,6 +182,19 @@ async def test_deepseek_selection_is_atomic_and_provider_switch_invalidates_targ
     assert profile.cli_params.deepseek["provider"] == "account"
 
 
+@pytest.mark.asyncio
+async def test_bot_wide_provider_selection_requires_a_deepseek_default_and_an_agent_id(tmp_path):
+    manager = _manager_with_deepseek(tmp_path)
+    profile = manager.managed_profiles["worker"]
+    profile.cli_type = "codex"
+    with pytest.raises(WebApiError) as wrong_tool:
+        await api_service.update_deepseek_selection(manager, "worker", 1, provider="account")
+    assert wrong_tool.value.code == "invalid_cli_type"
+    with pytest.raises(ValueError, match="agent ID"):
+        await manager.update_deepseek_selection("worker", "account", None, None, agent_id="@ses_invalid")
+    assert profile.cli_params.deepseek["provider"] is None
+
+
 def test_deepseek_catalog_fallback_preserves_saved_provider_and_model(tmp_path, monkeypatch) -> None:
     manager = _manager_with_deepseek(tmp_path)
     manager.managed_profiles["worker"].cli_params.deepseek.update(
@@ -215,3 +232,90 @@ def test_deepseek_cluster_override_inherits_provider(tmp_path) -> None:
     assert override.get_param("deepseek", "provider") == "account"
     assert override.get_param("deepseek", "model") == "account-model"
     assert override.get_param("deepseek", "reasoning_effort") == "high"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["selection", "parameter", "reset", "reset_all"])
+async def test_provider_transition_labels_legacy_threads_before_cold_reopen(tmp_path, change):
+    manager = _manager_with_deepseek(tmp_path)
+    profile = manager.managed_profiles["worker"]
+    previous = None if change == "selection" else "old"
+    profile.cli_params.deepseek["provider"] = previous
+    bot_id = resolve_session_bot_id(manager, "worker")
+    user_id = chat_session_user_id()
+    workspace = profile.working_dir
+    store = ChatStore(workspace)
+    named = create_web_chat_session(bot_id, "worker", user_id, workspace, "Harness", selected_cli_type="deepseek")
+    sibling = create_web_chat_session(bot_id, "worker", user_id, workspace, "Other")
+
+    def thread(scope, native_id, meta=None, **overrides):
+        owner = dict(bot_id=bot_id, bot_alias="worker", user_id=user_id, working_dir=workspace)
+        owner.update(overrides)
+        cid = store.create_conversation(
+            agent_id=scope, session_epoch=0, cli_type="deepseek", native_provider="deepseek", **owner,
+        )
+        store.set_conversation_native_session(cid, native_id, meta)
+        return cid
+
+    first = thread(named.storage_scope, "native-1", {"existing": 1})
+    inactive = thread(named.storage_scope, None)
+    legacy_turn = store.begin_turn(
+        bot_id=bot_id, bot_alias="worker", user_id=user_id, working_dir=workspace, agent_id=named.storage_scope,
+        conversation_id=inactive, session_epoch=0, cli_type="deepseek", native_provider="deepseek", user_text="Old turn",
+    )
+    store.complete_turn(legacy_turn, content="Reply", completion_state="completed", native_session_id="native-inactive")
+    other = thread(sibling.storage_scope, "native-other")
+    main = thread("main", "main-native")
+    recorded = thread(named.storage_scope, "known", {"deepseek_provider": None, "existing": 2})
+
+    async def select(cid):
+        target = resolve_named_chat_target(manager, "worker", user_id, named.web_session_id)
+        await api_service.select_conversation(manager, "worker", user_id, cid, target=target)
+        return target.session.deepseek_session_id
+
+    await manager.set_bot_cli_param("worker", "deepseek", "model", "new-model")
+    assert await select(first) == "native-1"
+    assert store.get_conversation_native_session(first)["meta"] == {"existing": 1}
+    excluded = [
+        thread(named.storage_scope, "different-bot", bot_alias="neighbor"),
+        thread("@ses_" + "2" * 32, "different-account", user_id=user_id + 1),
+        thread(named.storage_scope, "different-workspace", working_dir=workspace + "-old"),
+        thread("cluster-slot-1", "cluster-native", cluster_parent_conversation_id=main),
+        thread(named.storage_scope, None),
+    ]
+    if change == "selection":
+        await manager.update_deepseek_selection("worker", "new", None, None)
+    elif change == "parameter":
+        await manager.set_bot_cli_param("worker", "deepseek", "provider", "new")
+    else:
+        await manager.reset_bot_cli_params("worker", "deepseek" if change == "reset" else None)
+    # Check the transition itself before opening a chat runs legacy user migration.
+    assert all(store.get_conversation_native_session(cid)["meta"] == {} for cid in excluded)
+    assert await select(first) is None
+    unload_bot_sessions("worker")
+    manager = MultiBotManager(BotProfile(alias="main", working_dir=workspace), str(tmp_path / "bots.json"))
+    assert await select(inactive) is None
+    assert store.get_conversation_native_session(first) == {
+        "session_id": "native-1", "meta": {"existing": 1, "deepseek_provider": previous},
+    }
+    for cid in (inactive, other, main):
+        assert store.get_conversation_native_session(cid)["meta"] == {"deepseek_provider": previous}
+    assert store.get_conversation_native_session(recorded)["meta"] == {"deepseek_provider": None, "existing": 2}
+    await manager.set_bot_cli_param("worker", "deepseek", "provider", previous)
+    assert await select(inactive) == "native-inactive"
+
+
+@pytest.mark.asyncio
+async def test_legacy_binding_write_failure_retains_previous_provider(tmp_path, monkeypatch):
+    manager = _manager_with_deepseek(tmp_path)
+    await manager.set_bot_cli_param("worker", "deepseek", "provider", "previous")
+
+    def unavailable(*args, **kwargs):
+        raise OSError("history unavailable")
+
+    monkeypatch.setattr(ChatStore, "record_legacy_deepseek_provider", unavailable)
+    with pytest.raises(OSError, match="history unavailable"):
+        await manager.update_deepseek_selection("worker", "next", None, None)
+    assert manager.managed_profiles["worker"].cli_params.deepseek["provider"] == "previous"
+    reopened = MultiBotManager(BotProfile(alias="main", working_dir=str(tmp_path)), str(tmp_path / "bots.json"))
+    assert reopened.managed_profiles["worker"].cli_params.deepseek["provider"] == "previous"

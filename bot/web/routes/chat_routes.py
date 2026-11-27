@@ -9,6 +9,8 @@ def register(app: web.Application, server) -> None:
     app.router.add_get("/api/bots", server.get_bots)
     app.router.add_get(sessions, server.get_chat_sessions_view)
     app.router.add_post(sessions, server.post_chat_session_view)
+    app.router.add_get(sessions + "/{session_id}/cli-params", server.get_cli_params)
+    app.router.add_patch(sessions + "/{session_id}/cli-params", server.patch_cli_params)
 
     for base in (bot, sessions + "/{session_id}"):
         app.router.add_get(base, server.get_bot_overview)

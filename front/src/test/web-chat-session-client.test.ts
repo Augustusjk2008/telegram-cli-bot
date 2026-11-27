@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import appShell from "../../index.html?raw";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { RealWebBotClient } from "../services/realWebBotClient";
-import { WebApiClientError } from "../services/types";
+import { CLI_TYPES, WebApiClientError } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 afterEach(() => {
@@ -142,6 +142,9 @@ describe("named Web chat client", () => {
     const client = new RealWebBotClient().forChatSession("bot", "missing");
     const requests: Array<[string, string, (client: WebBotClient) => Promise<unknown>]> = [
       ["GET", "", (c) => c.getBotOverview("bot")],
+      ["GET", "/cli-params?cli_type=antigravity", (c) => c.getCliParams("bot", "antigravity")],
+      ["PATCH", "/cli-params", (c) => c.updateCliParam("bot", "effort", "low", "antigravity")],
+      ["PATCH", "/cli-params", (c) => c.updateDeepSeekSelection("bot", { provider: "p", model: "m", reasoningEffort: "high" })],
       ["GET", "/history/delta?after_id=last&limit=5&revision=8", (c) => c.listMessageDelta("bot", "last", 5, { revision: 8 })],
       ["GET", "/history/m%2F1/trace?payload=compact", (c) => c.getMessageTrace("bot", "m/1")],
       ["GET", "/history/m%2F1/trace/event?id=t", (c) => c.getMessageTraceEvent!("bot", "m/1", { id: "t" })],
@@ -166,6 +169,154 @@ describe("named Web chat client", () => {
       expect(init.credentials).toBe("same-origin");
     }
     expect(fetchMock).toHaveBeenCalledTimes(requests.length);
+  });
+
+  it("resolves model discovery and both settings mutations through the selected named chat", async () => {
+    const alias = "team/qa";
+    const base = "/api/bots/team%2Fqa";
+    const catalog = { enabled: true, cli_options: [], items: [
+      { id: "review", title: "Review", selected_cli_type: "antigravity", effective_cli_type: "antigravity" },
+      { id: "models", title: "Models", selected_cli_type: "deepseek", effective_cli_type: "deepseek" },
+    ] };
+    const selection = { provider: "p", model: "pinned-model", reasoningEffort: "high" };
+    const fetchMock = vi.fn(async (url: string, _init: RequestInit) => {
+      if (url.endsWith("/sessions")) return ok(catalog);
+      if (url.includes("/sessions/models/")) return ok({
+        cli_type: "deepseek", params: selection, provider_changed: true,
+        provider_options: [{ id: "p", label: "Pinned provider" }],
+      });
+      return ok({
+        cli_type: "antigravity", cli_path: "/private/agy",
+        params: { model: "m", extra_args: ["private"] }, defaults: { effort: "low", sandbox: true },
+        schema: { model: { type: "string", enum: ["m"] }, sandbox: { type: "boolean" } },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const root = new RealWebBotClient();
+    await root.listChatSessions(alias);
+    const review = root.forChatSession(alias, "review");
+    const payload = await review.getCliParams(alias, "antigravity");
+    expect(payload).toEqual({
+      cliType: "antigravity", params: { model: "m" }, defaults: { effort: "low" },
+      schema: { model: { type: "string", enum: ["m"] } },
+    });
+    expect(await review.updateCliParam(alias, "effort", "low", "antigravity")).toEqual(payload);
+    const deepseek = root.forChatSession(alias, "models");
+    expect(await deepseek.updateDeepSeekSelection(alias, selection)).toMatchObject({
+      cliType: "deepseek", providerChanged: true, providerOptions: [{ id: "p", label: "Pinned provider" }],
+    });
+    expect(await root.getCliParams(alias)).toMatchObject({ cliPath: "/private/agy", params: { extra_args: ["private"] } });
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      base + "/sessions", base + "/sessions/review/cli-params?cli_type=antigravity",
+      base + "/sessions/review/cli-params", base + "/sessions/models/cli-params", base + "/cli-params",
+    ]);
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1].body))).toEqual({ cli_type: "antigravity", key: "effort", value: "low" });
+    expect(JSON.parse(String(fetchMock.mock.calls[3][1].body))).toEqual({
+      cli_type: "deepseek", selection: { provider: "p", model: "pinned-model", reasoning_effort: "high" },
+    });
+  });
+
+  it("uses legacy controls only for sessions identified by a phase-one host", async () => {
+    const legacy = { enabled: true, items: [{ id: "legacy", title: "Legacy" }] };
+    const newItem = { id: "new", title: "New" };
+    const payload = { cli_type: "claude", params: {}, defaults: {}, schema: {}, diagnostic: "/private/path" };
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      if (url.endsWith("/sessions")) return ok(init.method === "POST" ? newItem : legacy);
+      return ok(payload);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const root = new RealWebBotClient();
+    const named = root.forChatSession("bot", "legacy");
+    await root.listChatSessions("bot");
+    expect(await named.getCliParams("bot", "claude")).not.toHaveProperty("diagnostic");
+    await named.updateCliParam("bot", "model", "m", "claude");
+    let finishRefresh!: (response: Response) => void;
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { finishRefresh = resolve; }));
+    const refreshing = root.listChatSessions("bot");
+    await root.createChatSession("bot", newItem.title);
+    finishRefresh(ok(legacy));
+    await refreshing;
+    await root.forChatSession("bot", newItem.id).getCliParams("bot");
+    await root.forChatSession("bot", "unlisted").getCliParams("bot");
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/api/bots/bot/sessions", "/api/bots/bot/cli-params?cli_type=claude", "/api/bots/bot/cli-params",
+      "/api/bots/bot/sessions", "/api/bots/bot/sessions", "/api/bots/bot/cli-params", "/api/bots/bot/sessions/unlisted/cli-params",
+    ]);
+
+    fetchMock.mockResolvedValueOnce(ok({ ...legacy, cli_options: [{ cli_type: "claude", available: true }] }));
+    await root.listChatSessions("bot");
+    await root.listChatSessions("bot"); // A late phase-one catalog cannot reopen the legacy mutation path.
+    fetchMock.mockResolvedValueOnce(Response.json({ ok: false, error: { code: "forbidden" } }, { status: 403 }));
+    await expect(named.updateCliParam("bot", "model", "m", "claude")).rejects.toMatchObject({ code: "forbidden" });
+    expect(fetchMock.mock.calls.slice(7).map(([url]) => url)).toEqual([
+      "/api/bots/bot/sessions", "/api/bots/bot/sessions", "/api/bots/bot/sessions/legacy/cli-params",
+    ]);
+  });
+
+  it("binds mock chat controls to the effective tool and saves changes in the shared backend namespace", async () => {
+    const root = new MockWebBotClient();
+    const pinned = await root.createChatSession("main", "Review", "claude");
+    const view = root.forChatSession("main", pinned.id);
+    const saved = await view.updateCliParam("main", "effort", "low");
+    expect(saved).toMatchObject({ cliType: "claude", params: { effort: "low" } });
+    expect(saved.schema).not.toHaveProperty("extra_args");
+    expect(await root.getCliParams("main", "claude")).toMatchObject({ params: { effort: "low" }, schema: { extra_args: {} } });
+    await expect(view.getCliParams("main", "codex")).rejects.toMatchObject({ code: "session_cli_mismatch" });
+    await expect(view.updateDeepSeekSelection("main", { provider: "p", model: "m", reasoningEffort: null }))
+      .rejects.toMatchObject({ code: "session_cli_mismatch" });
+    await expect(view.updateCliParam("main", "extra_args", []))
+      .rejects.toMatchObject({ code: "invalid_chat_cli_param" });
+  });
+
+  it("maps only public tool metadata and reads the effective CLI from the bound overview", async () => {
+    const raw = {
+      id: "ses_review", title: "Review", selected_cli_type: "claude", effective_cli_type: "claude",
+      cli_path: "/private/cli", cli_params: { extra_args: ["private"] },
+    };
+    const item = { id: raw.id, title: raw.title, selectedCliType: "claude", effectiveCliType: "claude" };
+    const overview = {
+      bot: {
+        alias: "bot", cli_type: "codex_server", cli_path: "/bot/default", voice: { enabled: true },
+        cluster: { tier_configs: { high: { cli_path: "/private/child" } } },
+      },
+      session: { cli_type: "claude", cli_path: raw.cli_path },
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(ok({
+        enabled: true, items: [
+          raw, { id: "damaged", title: "Old record", selected_cli_type: "unknown", effective_cli_type: "unknown" },
+        ],
+        cli_options: CLI_TYPES.map((cli_type) => ({ cli_type, available: cli_type !== "deepseek", cli_path: raw.cli_path })),
+      }))
+      .mockResolvedValueOnce(ok(raw))
+      .mockResolvedValueOnce(ok(overview))
+      .mockResolvedValueOnce(ok(overview));
+    vi.stubGlobal("fetch", fetchMock);
+    const root = new RealWebBotClient();
+    expect(await root.listChatSessions("bot")).toEqual({
+      enabled: true, items: [
+        item, { id: "damaged", title: "Old record", selectedCliType: "unknown", effectiveCliType: "unknown" },
+      ],
+      cliOptions: CLI_TYPES.map((cliType) => ({ cliType, available: cliType !== "deepseek" })),
+    });
+    expect(await root.createChatSession("bot", "Review", "claude")).toEqual(item);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ title: "Review", cli_type: "claude" });
+    const scoped = await root.forChatSession("bot", raw.id).getBotOverview("bot");
+    expect(scoped).toMatchObject({ cliType: "claude", voice: { enabled: false } });
+    expect(scoped).not.toHaveProperty("cliPath");
+    expect(scoped).not.toHaveProperty("cluster");
+    expect(await root.getBotOverview("bot")).toMatchObject({ cliType: "codex_server", cliPath: "/bot/default" });
+  });
+
+  it("keeps an explicit create failure and never retries the request with just the title", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({
+      ok: false, error: { code: "cli_unavailable", message: "此工具不可用" },
+    }, { status: 409 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(new RealWebBotClient().createChatSession("bot", "Review", "claude"))
+      .rejects.toMatchObject({ code: "cli_unavailable" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ title: "Review", cli_type: "claude" });
   });
 
   it("streams from the bound URL with the account's current authorization and SSE message identity", async () => {
@@ -235,5 +386,25 @@ describe("named Web chat client", () => {
     expect(await clients[0].getMessageTraceEvent!("main", answer.id, { id: traceEvent.id })).toBeNull();
     expect((await clients[0].listMessages("main")).items.some((item) => item.role === "assistant")).toBe(false);
     expect((await clients[0].getBotOverview("main")).isProcessing).toBe(false);
+  });
+
+  it("keeps all five pinned mock tools across a default change, while title-only chats follow it", async () => {
+    const root = new MockWebBotClient();
+    const inherited = await root.createChatSession("main", "Inherit");
+    const pinned = await Promise.all(CLI_TYPES.map((type) => root.createChatSession("main", type, type)));
+    const views = pinned.map((item) => root.forChatSession("main", item.id));
+    await root.updateBotCli("main", "antigravity", "/private/agy");
+    const catalog = await root.listChatSessions("main");
+    expect(catalog.cliOptions).toEqual(CLI_TYPES.map((cliType) => ({ cliType, available: true })));
+    expect(catalog.items.slice(0, 2)).toEqual(["main", inherited.id].map((id) => ({
+      id, title: id === "main" ? "主会话" : "Inherit", selectedCliType: null, effectiveCliType: "antigravity",
+    })));
+    expect(await root.forChatSession("main", inherited.id).getBotOverview("main")).toMatchObject({ cliType: "antigravity" });
+    for (const [index, cliType] of CLI_TYPES.entries()) {
+      expect(catalog.items[index + 2]).toEqual({ ...pinned[index], selectedCliType: cliType, effectiveCliType: cliType });
+      const view = views[index];
+      expect(await view.getBotOverview("main")).toMatchObject({ cliType, voice: { enabled: false } });
+      expect((await view.createConversation("main")).conversation.cliType).toBe(cliType);
+    }
   });
 });

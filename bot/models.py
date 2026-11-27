@@ -496,6 +496,8 @@ class UserSession:
     agent_id: str = "main"
     web_session_id: str = field(default="", kw_only=True)
     web_session_title: str = field(default="", kw_only=True)
+    selected_cli_type: Optional[str] = field(default=None, kw_only=True)
+    selected_cli_path: Optional[str] = field(default=None, kw_only=True, repr=False)
     browse_dir: Optional[str] = None
     history: List[dict] = field(default_factory=list)
     codex_session_id: Optional[str] = None
@@ -527,6 +529,7 @@ class UserSession:
     _lifecycle_token: str = field(default="", repr=False, compare=False)
     _execution_id: Optional[str] = field(default=None, repr=False, compare=False)
     _execution_turn_id: Optional[str] = field(default=None, repr=False, compare=False)
+    _steer_requires_unsafe_cli: bool = field(default=False, repr=False, compare=False)
     _execution_mode: str = field(default="", repr=False, compare=False)
     _control_stop_task: Any = field(default=None, repr=False, compare=False)
     _control_stop_snapshot: Optional[dict] = field(default=None, repr=False, compare=False)

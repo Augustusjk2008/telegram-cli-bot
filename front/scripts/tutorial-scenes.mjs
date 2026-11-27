@@ -481,6 +481,21 @@ export const SCENES = [
     },
   },
 
+  {
+    chapter: "start",
+    shot: "chat-tool",
+    fresh: true,
+    async run(page) {
+      await chatPane(page).getByRole("combobox", { name: "当前聊天会话" }).selectOption("");
+      const dialog = page.getByRole("dialog", { name: "新建聊天会话" });
+      await dialog.getByLabel("聊天会话名称").fill("代码审查");
+      await dialog.getByLabel("AI 工具").selectOption("claude");
+    },
+    hotspots: {
+      dialog: (page) => page.getByRole("dialog", { name: "新建聊天会话" }),
+    },
+  },
+
   // ------------------------------------------------------------------ chat
   {
     chapter: "chat",

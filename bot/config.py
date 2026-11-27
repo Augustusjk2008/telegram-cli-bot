@@ -200,7 +200,8 @@ def _effective_frontend_base_path(name: str, web_base_path: str) -> str:
 DEFAULT_APP_UPDATE_REPOSITORY = "https://github.com/Augustusjk2008/telegram-cli-bot"
 
 # ============ 常量定义 ============
-SUPPORTED_CLI_TYPES = {"claude", "codex", "codex_server", "antigravity", "deepseek"}
+CLI_COMMANDS = {"codex": "codex", "codex_server": "codex", "claude": "claude", "antigravity": "agy", "deepseek": "dsh"}
+SUPPORTED_CLI_TYPES = set(CLI_COMMANDS)
 CLI_ENV_EXCLUDED_NAMES = frozenset({
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_MODEL",
@@ -269,11 +270,7 @@ def _refresh_environment_config() -> None:
 
     CLI_TYPE = _get_project_config("CLI_TYPE", "codex").strip().lower()
     configured_cli_path = _get_project_config("CLI_PATH", "").strip()
-    CLI_PATH = configured_cli_path or {
-        "claude": "claude",
-        "antigravity": "agy",
-        "deepseek": "dsh",
-    }.get(CLI_TYPE, "codex")
+    CLI_PATH = configured_cli_path or CLI_COMMANDS.get(CLI_TYPE, "codex")
     TCB_CODEX_SERVER_VOICE_ENABLED = _get_project_bool("TCB_CODEX_SERVER_VOICE_ENABLED", False)
     CLI_MODEL_OPTIONS = _parse_cli_model_options(_get_project_config("CLI_MODEL_OPTIONS", ""))
     CLI_GLOBAL_EXTRA_ARGS = _parse_cli_global_extra_args(_get_project_config("CLI_GLOBAL_EXTRA_ARGS", "{}"))
@@ -539,13 +536,7 @@ def reload_system_environment(env_path: str | os.PathLike[str] | None = None) ->
 def default_cli_path(cli_type: str) -> str:
     if cli_type == CLI_TYPE:
         return CLI_PATH
-    if cli_type == "claude":
-        return "claude"
-    if cli_type == "antigravity":
-        return "agy"
-    if cli_type == "deepseek":
-        return "dsh"
-    return "codex"
+    return CLI_COMMANDS.get(cli_type, "codex")
 
 
 DANGEROUS_COMMANDS: Set[str] = {

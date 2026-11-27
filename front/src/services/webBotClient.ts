@@ -50,6 +50,7 @@ import type {
   UsageSamplesExportResult,
   UsageSamplesImportResult,
   CliParamsPayload,
+  CliType,
   DeepSeekSelectionRequest,
   DeepSeekSelectionResponse,
   CreateBotInput,
@@ -287,7 +288,7 @@ export interface WebBotClient {
   updateBotPromptPresets(botAlias: string, presets: PromptPreset[]): Promise<BotSummary>;
   updateGlobalPromptPresets(presets: PromptPreset[]): Promise<PromptPreset[]>;
   listChatSessions?(botAlias: string): Promise<ChatSessionList>;
-  createChatSession?(botAlias: string, title: string): Promise<ChatSessionSummary>;
+  createChatSession?(botAlias: string, title: string, cliType?: CliType): Promise<ChatSessionSummary>;
   forChatSession?(botAlias: string, sessionId: string): WebBotClient;
   getBotOverview(botAlias: string, options?: AgentScopedOptions): Promise<BotOverview>;
   connectCodexVoice(botAlias: string, options: CodexVoiceConnectionOptions): CodexVoiceConnection;
@@ -533,7 +534,7 @@ export interface WebBotClient {
   stopBot(botAlias: string): Promise<BotSummary>;
   archiveBot(botAlias: string): Promise<BotSummary>;
   unarchiveBot(botAlias: string): Promise<BotSummary>;
-  getCliParams(botAlias: string, cliType?: import("./types").CliType): Promise<CliParamsPayload>;
+  getCliParams(botAlias: string, cliType?: CliType): Promise<CliParamsPayload>;
   updateCliParam(botAlias: string, key: string, value: unknown, cliType?: string): Promise<CliParamsPayload>;
   updateDeepSeekSelection(botAlias: string, selection: DeepSeekSelectionRequest): Promise<DeepSeekSelectionResponse>;
   resetCliParams(botAlias: string, cliType?: string): Promise<CliParamsPayload>;

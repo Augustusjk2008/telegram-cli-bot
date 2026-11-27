@@ -3,6 +3,7 @@ import { mapChatTranslation, mapUserTranslationUpdate } from "../utils/chatTrans
 import { mapRemoteWorkspace, remoteConnectionBody } from "./remoteWorkspace";
 import { cliTypeLabel, isCodexCli } from "../utils/cliType";
 import {
+  CLI_TYPES,
   GIT_CAPABILITY_NAMES,
   WebApiClientError,
 } from "./types";
@@ -1848,6 +1849,33 @@ function serializePromptPresets(presets: PromptPreset[]) {
 
 function mapCliType(value: unknown): CliType {
   return value === "claude" || value === "codex_server" || value === "antigravity" || value === "deepseek" ? value : "codex";
+}
+
+function sessionCliType(raw: unknown): CliType {
+  const cliType = CLI_TYPES.find((value) => value === raw);
+  if (!cliType) throw new Error("服务返回了未知的聊天工具");
+  return cliType;
+}
+
+type RawChatSession = {
+  id: string;
+  title: string;
+  selected_cli_type?: string | null;
+  effective_cli_type?: string;
+};
+
+function mapChatSession(raw: RawChatSession): ChatSessionSummary {
+  if (!raw || typeof raw.id !== "string" || typeof raw.title !== "string") {
+    throw new Error("服务返回了无效的聊天会话");
+  }
+  const item: ChatSessionSummary = { id: raw.id, title: raw.title };
+  // A damaged saved choice has a public "unknown" marker. Other chats remain usable.
+  const displayType = (value: string) => value === "unknown" ? "unknown" : sessionCliType(value);
+  if (raw.selected_cli_type !== undefined) {
+    item.selectedCliType = raw.selected_cli_type === null ? null : displayType(raw.selected_cli_type);
+  }
+  if (raw.effective_cli_type !== undefined) item.effectiveCliType = displayType(raw.effective_cli_type);
+  return item;
 }
 
 function mapRemoteWorkspaceStatus(value: unknown) {
@@ -4784,13 +4812,23 @@ function isRetryableFetchNetworkError(error: unknown) {
 
 export class RealWebBotClient implements WebBotClient {
   private readonly chatSessionClients = new Map<string, WebBotClient>();
+  // Only IDs acknowledged by a title-only catalog can use Bot-scoped controls.
+  // A null entry records a pin-aware host, including across late catalog responses.
+  private readonly legacyCliControlSessions = new Map<string, Set<string> | null>();
+  private namedChat = false;
 
   private chatBasePath(botAlias: string): string {
     return `/api/bots/${encodeURIComponent(botAlias)}`;
   }
 
   async listChatSessions(botAlias: string): Promise<ChatSessionList> {
-    const catalog = await this.requestJson<ChatSessionList>(`${this.chatBasePath(botAlias)}/sessions`, {}, async () => {
+    const key = botAlias.trim().toLowerCase();
+    const previousLegacyIds = this.legacyCliControlSessions.get(key);
+    const catalog = await this.requestJson<{
+      enabled: boolean;
+      items: RawChatSession[];
+      cli_options?: { cli_type: string; available: boolean }[];
+    }>(`${this.chatBasePath(botAlias)}/sessions`, {}, async () => {
       // Older hosts serve their SPA for unknown GETs. Confirm access to this Bot before
       // letting the UI drop its saved named session and open the default chat.
       const overview = await this.getBotOverview(botAlias).catch((error: unknown) => {
@@ -4802,27 +4840,61 @@ export class RealWebBotClient implements WebBotClient {
       return { enabled: false, items: [{ id: "main", title: "主会话" }] };
     });
     if (typeof catalog?.enabled !== "boolean" || !Array.isArray(catalog.items)
-      || !catalog.items.every((item) => item && typeof item.id === "string" && typeof item.title === "string")) {
+      || (catalog.cli_options !== undefined && !Array.isArray(catalog.cli_options))) {
       throw new Error("服务返回了无效的聊天会话列表");
     }
-    return catalog;
+    const result: ChatSessionList = {
+      enabled: catalog.enabled,
+      items: catalog.items.map(mapChatSession),
+      ...(catalog.cli_options ? { cliOptions: catalog.cli_options.map((option) => ({
+        cliType: sessionCliType(option?.cli_type),
+        available: option.available === true,
+      })) } : {}),
+    };
+    if (result.cliOptions !== undefined || result.items.some((item) => item.selectedCliType !== undefined || item.effectiveCliType !== undefined)) {
+      this.legacyCliControlSessions.set(key, null);
+    } else if (this.legacyCliControlSessions.get(key) !== null) {
+      if (result.enabled) {
+        const ids = new Set(result.items.map((item) => item.id));
+        // A create or another listing may have confirmed more title-only IDs during this GET.
+        const latest = this.legacyCliControlSessions.get(key);
+        if (latest && latest !== previousLegacyIds) {
+          for (const id of latest) if (!previousLegacyIds?.has(id)) ids.add(id);
+        }
+        this.legacyCliControlSessions.set(key, ids);
+      } else {
+        this.legacyCliControlSessions.delete(key);
+      }
+    }
+    return result;
   }
 
-  async createChatSession(botAlias: string, title: string): Promise<ChatSessionSummary> {
-    return this.requestJson(`${this.chatBasePath(botAlias)}/sessions`, {
+  async createChatSession(botAlias: string, title: string, cliType?: CliType): Promise<ChatSessionSummary> {
+    const raw = await this.requestJson<RawChatSession>(`${this.chatBasePath(botAlias)}/sessions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title }),
+      body: JSON.stringify({ title, cli_type: cliType }),
     });
+    const item = mapChatSession(raw);
+    const key = botAlias.trim().toLowerCase();
+    if (cliType !== undefined || item.selectedCliType !== undefined || item.effectiveCliType !== undefined) {
+      this.legacyCliControlSessions.set(key, null);
+    } else {
+      const ids = this.legacyCliControlSessions.get(key);
+      if (ids) this.legacyCliControlSessions.set(key, new Set(ids).add(item.id));
+    }
+    if (cliType !== undefined && item.selectedCliType !== cliType) throw new Error("服务未确认所选的 AI 工具");
+    return item;
   }
 
   forChatSession(botAlias: string, sessionId: string): WebBotClient {
     return bindChatSession(this, this.chatSessionClients, botAlias, sessionId, () => {
       const basePath = `${this.chatBasePath(botAlias)}/sessions/${encodeURIComponent(sessionId)}`;
       const chat = Object.create(this) as this;
+      chat.namedChat = true;
       chat.chatBasePath = () => basePath;
       return chat;
-    });
+    }, () => this.legacyCliControlSessions.get(botAlias.trim().toLowerCase())?.has(sessionId) === true);
   }
 
   private token = "";
@@ -6018,6 +6090,7 @@ export class RealWebBotClient implements WebBotClient {
     const data = await this.requestJson<{
       bot: RawBotSummary;
       session: {
+        cli_type?: string;
         working_dir: string;
         message_count: number;
         history_count: number;
@@ -6042,11 +6115,16 @@ export class RealWebBotClient implements WebBotClient {
     }>(`${this.chatBasePath(botAlias)}${suffix}`);
 
     const summary = mapBotSummary(data.bot, data.session.is_processing);
+    if (this.namedChat) {
+      if (data.session.cli_type !== undefined) summary.cliType = sessionCliType(data.session.cli_type);
+      delete summary.cliPath;
+      delete summary.cluster;
+    }
     const overview: BotOverview = {
       ...summary,
       voice: {
-        enabled: summary.cliType !== "deepseek" && (data.voice ?? data.bot.voice)?.enabled === true,
-        reason: summary.cliType === "deepseek" ? "unsupported_cli" : (data.voice ?? data.bot.voice)?.reason || "disabled",
+        enabled: !this.namedChat && summary.cliType !== "deepseek" && (data.voice ?? data.bot.voice)?.enabled === true,
+        reason: this.namedChat || summary.cliType === "deepseek" ? "unsupported_cli" : (data.voice ?? data.bot.voice)?.reason || "disabled",
       },
       workingDir: data.session.working_dir || summary.workingDir,
       messageCount: data.session.message_count,
@@ -6062,7 +6140,7 @@ export class RealWebBotClient implements WebBotClient {
         ? { sessionEpoch: Number(data.session.session_epoch ?? data.session.sessionEpoch) }
         : {}),
       agents: (data.agents || []).map(mapAgentSummary),
-      activeClusterRun: mapActiveClusterRun(data.active_cluster_run),
+      activeClusterRun: this.namedChat ? null : mapActiveClusterRun(data.active_cluster_run),
       activeAgentId: String(data.active_agent_id || options.agentId || "main"),
       busyAgentIds: summary.busyAgentIds || [],
       busyAgentNames: summary.busyAgentNames || [],
@@ -8456,12 +8534,12 @@ export class RealWebBotClient implements WebBotClient {
     const params = new URLSearchParams();
     if (cliType) params.set("cli_type", cliType);
     const suffix = params.toString() ? `?${params.toString()}` : "";
-    const data = await this.requestJson<RawCliParamsPayload>(`/api/bots/${encodeURIComponent(botAlias)}/cli-params${suffix}`);
+    const data = await this.requestJson<RawCliParamsPayload>(`${this.chatBasePath(botAlias)}/cli-params${suffix}`);
     return mapCliParamsPayload(data);
   }
 
   async updateCliParam(botAlias: string, key: string, value: unknown, cliType?: string): Promise<CliParamsPayload> {
-    const data = await this.requestJson<RawCliParamsPayload>(`/api/bots/${encodeURIComponent(botAlias)}/cli-params`, {
+    const data = await this.requestJson<RawCliParamsPayload>(`${this.chatBasePath(botAlias)}/cli-params`, {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
@@ -8476,7 +8554,7 @@ export class RealWebBotClient implements WebBotClient {
   }
 
   async updateDeepSeekSelection(botAlias: string, selection: DeepSeekSelectionRequest): Promise<DeepSeekSelectionResponse> {
-    const data = await this.requestJson<RawCliParamsPayload>(`/api/bots/${encodeURIComponent(botAlias)}/cli-params`, {
+    const data = await this.requestJson<RawCliParamsPayload>(`${this.chatBasePath(botAlias)}/cli-params`, {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",

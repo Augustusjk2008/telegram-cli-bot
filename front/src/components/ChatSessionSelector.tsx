@@ -1,18 +1,27 @@
-import { useLayoutEffect, useRef, useState } from "react";
-import type { ChatSessionSummary } from "../services/types";
+import { useId, useLayoutEffect, useRef, useState } from "react";
+import { ChevronDown } from "lucide-react";
+import type { ChatSessionList, ChatSessionSummary, CliType } from "../services/types";
+import { cliTypeLabel } from "../utils/cliType";
 
 type Props = {
   items: ChatSessionSummary[];
+  cliOptions?: ChatSessionList["cliOptions"];
   selectedId: string;
+  activeCliType?: CliType;
   focusOnMount: boolean;
   onSelect: (session: ChatSessionSummary) => void;
-  onCreate?: (title: string) => Promise<ChatSessionSummary>;
+  onCreate?: (title: string, cliType?: CliType) => Promise<ChatSessionSummary>;
 };
 
-export function ChatSessionSelector({ items, selectedId, focusOnMount, onSelect, onCreate }: Props) {
+export function ChatSessionSelector({ items, cliOptions, selectedId, activeCliType, focusOnMount, onSelect, onCreate }: Props) {
   const selectRef = useRef<HTMLSelectElement>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const toolRef = useRef<HTMLSelectElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const availabilityId = useId();
   const [title, setTitle] = useState("");
+  const [choices, setChoices] = useState<Props["cliOptions"]>();
+  const [cliType, setCliType] = useState<CliType>();
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const request = useRef(0);
@@ -24,6 +33,26 @@ export function ChatSessionSelector({ items, selectedId, focusOnMount, onSelect,
     if (titles.has(item.title)) repeatedTitles.add(item.title);
     titles.add(item.title);
   }
+  function toolLabel(item: ChatSessionSummary) {
+    if (!item.effectiveCliType) return "";
+    if (item.effectiveCliType === "unknown") return "未知工具";
+    const label = cliTypeLabel(item.id === selectedId && activeCliType ? activeCliType : item.effectiveCliType);
+    return item.selectedCliType ? label : `${label}（Bot 默认）`;
+  }
+  const active = items.find((item) => item.id === selectedId);
+  const activeTool = active && toolLabel(active);
+  const canCreate = Boolean(title.trim()) && !saving
+    && (!choices || choices.some((item) => item.cliType === cliType && item.available));
+  const hasUnavailable = choices && (!choices.length || choices.some((item) => !item.available));
+
+  function sessionTitle(item: ChatSessionSummary) {
+    const suffix = repeatedTitles.has(item.title) && (item.id === "main" ? "默认" : item.id.slice(-8));
+    return suffix ? `${item.title} · ${suffix}` : item.title;
+  }
+
+  useLayoutEffect(() => {
+    if (error) (toolRef.current || inputRef.current)?.focus();
+  }, [error]);
 
   useLayoutEffect(() => {
     setSaving(false);
@@ -39,12 +68,12 @@ export function ChatSessionSelector({ items, selectedId, focusOnMount, onSelect,
 
   async function submit() {
     const name = title.trim();
-    if (!onCreate || !name || saving) return;
+    if (!onCreate || !canCreate) return;
     const version = ++request.current;
     setSaving(true);
     setError("");
     try {
-      const item = await onCreate(name);
+      const item = choices ? await onCreate(name, cliType) : await onCreate(name);
       if (request.current === version) selectCreated.current(item);
     } catch (err) {
       if (request.current === version) {
@@ -56,30 +85,46 @@ export function ChatSessionSelector({ items, selectedId, focusOnMount, onSelect,
 
   return (
     <>
-      <select
-        ref={selectRef}
-        autoFocus={focusOnMount}
-        aria-label="当前聊天会话"
-        value={selectedId}
-        className="h-8 max-w-[min(30vw,10rem)] shrink-0 truncate rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-1 text-xs text-[var(--text)]"
-        onChange={(event) => {
-          const selected = items.find((item) => item.id === event.target.value);
-          if (selected) {
-            onSelect(selected);
-          } else if (onCreate) {
-            setTitle("");
-            setError("");
-            dialogRef.current?.showModal();
-          }
-        }}
-      >
-        {items.map((item) => (
-          <option key={item.id} value={item.id}>
-            {repeatedTitles.has(item.title) ? `${item.title} · ${item.id === "main" ? "默认" : item.id.slice(-8)}` : item.title}
-          </option>
-        ))}
-        {onCreate ? <option value="">新建聊天会话…</option> : null}
-      </select>
+      <div className="relative max-w-[min(31vw,11rem)] shrink-0">
+        <select
+          ref={selectRef}
+          autoFocus={focusOnMount}
+          aria-label="当前聊天会话"
+          value={selectedId}
+          title={activeTool ? `${sessionTitle(active)} · ${activeTool}` : undefined}
+          className={`h-8 max-w-full truncate rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-1 text-xs ${activeTool ? "appearance-none pr-5 text-transparent!" : "text-[var(--text)]"}`}
+          onChange={(event) => {
+            const selected = items.find((item) => item.id === event.target.value);
+            if (selected) {
+              onSelect(selected);
+            } else if (onCreate) {
+              setTitle("");
+              setError("");
+              setChoices(cliOptions);
+              const defaultCli = items.find((item) => item.id === "main")?.effectiveCliType;
+              setCliType(defaultCli === "unknown" ? undefined : defaultCli);
+              dialogRef.current?.showModal();
+              inputRef.current?.focus();
+            }
+          }}
+        >
+          {items.map((item) => (
+            <option key={item.id} value={item.id} className="text-[var(--text)]">
+              {[sessionTitle(item), toolLabel(item)].filter(Boolean).join(" · ")}
+            </option>
+          ))}
+          {onCreate ? <option value="" className="text-[var(--text)]">新建聊天会话…</option> : null}
+        </select>
+        {activeTool ? (
+          <span aria-hidden="true" className="pointer-events-none absolute inset-0 flex items-center gap-1 px-1.5 text-[var(--text)]">
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate text-xs leading-tight">{sessionTitle(active)}</span>
+              <span className="truncate text-[10px] leading-tight text-[var(--muted)]">{activeTool}</span>
+            </span>
+            <ChevronDown className="h-3 w-3 shrink-0" />
+          </span>
+        ) : null}
+      </div>
       {onCreate ? (
         <dialog
           ref={dialogRef}
@@ -91,6 +136,7 @@ export function ChatSessionSelector({ items, selectedId, focusOnMount, onSelect,
             <label className="block text-sm font-medium">
               聊天会话名称
               <input
+                ref={inputRef}
                 required
                 maxLength={80}
                 disabled={saving}
@@ -99,10 +145,37 @@ export function ChatSessionSelector({ items, selectedId, focusOnMount, onSelect,
                 className="mt-2 h-9 w-full rounded-md border border-[var(--border)] bg-[var(--workbench-panel-bg)] px-2"
               />
             </label>
+            {choices && (
+              <>
+                <label className="mt-3 block text-sm font-medium">
+                  AI 工具
+                  <select
+                    ref={toolRef}
+                    value={cliType ?? ""}
+                    disabled={saving}
+                    aria-describedby={hasUnavailable ? availabilityId : undefined}
+                    onChange={(event) => setCliType(choices.find((item) => item.cliType === event.target.value)?.cliType)}
+                    className="mt-2 h-9 w-full rounded-md border border-[var(--border)] bg-[var(--workbench-panel-bg)] px-2"
+                  >
+                    {!choices.some((item) => item.cliType === cliType) && <option value="" disabled>请选择工具</option>}
+                    {choices.map((option) => (
+                      <option key={option.cliType} value={option.cliType} disabled={!option.available}>
+                        {cliTypeLabel(option.cliType)}{option.available ? "" : "（不可用）"}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {hasUnavailable && (
+                  <p id={availabilityId} className="mt-1 text-xs text-[var(--muted)]">
+                    {choices.some((item) => item.available) ? "此主机未找到标为不可用的工具。请选择可用工具。" : "此主机未找到可用的 AI 工具。"}
+                  </p>
+                )}
+              </>
+            )}
             {error ? <p role="alert" className="mt-2 text-xs text-[var(--status-danger)]">{error}</p> : null}
             <div className="mt-3 flex justify-end gap-2 text-sm">
               <button type="button" disabled={saving} onClick={closeDialog} className="h-8 rounded-md px-3">取消</button>
-              <button type="submit" disabled={saving || !title.trim()} className="h-8 rounded-md bg-[var(--accent)] px-3 text-[var(--accent-foreground)] disabled:opacity-60">
+              <button type="submit" disabled={!canCreate} className="h-8 rounded-md bg-[var(--accent)] px-3 text-[var(--accent-foreground)] disabled:opacity-60">
                 {saving ? "创建中…" : "创建"}
               </button>
             </div>

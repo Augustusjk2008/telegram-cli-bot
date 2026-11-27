@@ -43,6 +43,7 @@ from bot.cli_params import (
     get_default_params,
     get_params_schema,
     normalize_deepseek_selection,
+    normalize_deepseek_value,
     normalize_cli_model_options,
     with_global_extra_args,
 )
@@ -143,7 +144,7 @@ from bot.sessions import (
     update_bot_working_dir,
 )
 from bot.utils import is_dangerous_command, split_command_argv
-from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenceBuffer
+from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenceBuffer, restore_conversation_binding
 from bot.web.chat_sync_events import (
     CHAT_SYNC_REASON_CLUSTER,
     CHAT_SYNC_REASON_CONVERSATION,
@@ -152,7 +153,10 @@ from bot.web.chat_sync_events import (
     CHAT_SYNC_REASON_TURN_STARTED,
     publish_chat_sync,
 )
-from bot.web.chat_targets import ChatTarget, after_chat_catalog_change, check_named_chat_owner, reserve_chat_catalog, with_chat_target
+from bot.web.chat_targets import (
+    ChatTarget, after_chat_catalog_change, check_named_chat_owner, require_chat_cli_executable,
+    reserve_chat_catalog, with_chat_target,
+)
 from bot.web.chat_favorite_store import ChatFavoriteStore, FavoriteScope, build_favorite_item
 from bot.web.async_chat_store import run_chat_store_io
 from bot.web.chat_store import ChatStore, is_cli_history_provider
@@ -518,6 +522,7 @@ def _finish_control_execution(session: UserSession, execution_id: str | None) ->
         session._execution_id = None
         session._execution_turn_id = None
         session._execution_mode = ""
+        session._steer_requires_unsafe_cli = False
 
 
 def _require_update_admission() -> None:
@@ -795,11 +800,12 @@ def build_bot_summary(
             exclude_endless_group_id=str(runtime_map.get("main", {}).get("endless_group_id") or ""),
         )
 
+    named_chat = bool(getattr(session, "web_session_id", ""))
     return {
         "alias": profile.alias,
         "enabled": profile.enabled,
         "cli_type": profile.cli_type,
-        "cli_path": profile.cli_path,
+        **({} if named_chat else {"cli_path": profile.cli_path}),
         "working_dir": working_dir,
         "archived": profile.archived,
         **({"remote_workspace": dict(profile.remote_workspace)} if profile.remote_workspace else {}),
@@ -810,7 +816,7 @@ def build_bot_summary(
         "status": run_status,
         "service_status": service_status,
         **({"remote_workspace_status": remote_workspace_status} if remote_workspace_status else {}),
-        "cluster": profile.cluster.to_dict(),
+        "cluster": {"enabled": False} if named_chat else profile.cluster.to_dict(),
         "last_answer_completed_at": latest_answer_completed_at,
         "last_answer_terminal_at": latest_answer_terminal_at,
         **activity,
@@ -872,7 +878,7 @@ def get_overview(
         runtime_map = {"main": runtime_map.get(session.storage_scope, {})}
     return {
         "bot": {
-            **build_bot_summary(manager, alias, user_id, profile=profile, session=session),
+            **build_bot_summary(manager, alias, user_id, session=session),
             "execution_mode": resolved_execution_mode,
             "voice": voice,
         },
@@ -2016,23 +2022,36 @@ def _get_antigravity_model_options(profile: BotProfile) -> list[str]:
     return normalize_cli_model_options([*discovered, current_model])
 
 
+_CHAT_CLI_PARAMS = frozenset({"provider", "model", "reasoning_effort", "effort"})
+
+
+def _settings_cli_type(profile: BotProfile, requested: str | None, target: ChatTarget | None) -> str:
+    current = target.profile.cli_type if target else profile.cli_type
+    kind = str(requested or current or "").strip().lower()
+    if target and kind != target.profile.cli_type:
+        _raise(409, "session_cli_mismatch", "此配置与聊天会话的 AI 工具不匹配")
+    return kind
+
+
+@with_chat_target
 def get_cli_params_payload(
     manager: MultiBotManager,
     alias: str,
     cli_type: Optional[str] = None,
     *,
     deepseek_catalog: dict[str, Any] | None = None,
+    target: ChatTarget | None = None,
 ) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
-    resolved_cli_type = (cli_type or profile.cli_type or "").strip().lower()
+    resolved_cli_type = _settings_cli_type(profile, cli_type, target)
     if not resolved_cli_type:
         _raise(400, "missing_cli_type", "缺少 CLI 类型")
 
     try:
-        normalize_cli_type(resolved_cli_type)
-        target_profile = copy.copy(profile)
+        target_profile = copy.copy(target.profile if target else profile)
         target_profile.cli_type = resolved_cli_type
-        target_profile.cli_path = _cluster_cli_path(profile, resolved_cli_type)
+        if target is None:
+            target_profile.cli_path = _cluster_cli_path(profile, resolved_cli_type)
         target_profile.cli_params = CliParamsConfig.from_dict(profile.cli_params.to_dict())
         params = target_profile.cli_params.get_params(resolved_cli_type)
         schema = get_params_schema(resolved_cli_type)
@@ -2096,29 +2115,41 @@ def get_cli_params_payload(
                 "catalog_diagnostic": deepseek_catalog.get("catalog_diagnostic"),
             }
         )
+    if target:
+        del payload["cli_path"]
+        for key in ("params", "defaults", "schema"):
+            payload[key] = {name: value for name, value in payload[key].items() if name in _CHAT_CLI_PARAMS}
+        if payload.get("catalog_diagnostic"):
+            payload["catalog_diagnostic"] = _DEEPSEEK_CATALOG_FALLBACK_MESSAGE if payload["catalog_status"] != _DEEPSEEK_CATALOG_AVAILABLE else None
     return payload
 
 
+@with_chat_target
 async def update_cli_params(
     manager: MultiBotManager,
     alias: str,
     cli_type: Optional[str],
     key: str,
     value: Any,
+    *,
+    target: ChatTarget | None = None,
 ) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
-    resolved_cli_type = (cli_type or profile.cli_type or "").strip().lower()
+    resolved_cli_type = _settings_cli_type(profile, cli_type, target)
     if not key or not key.strip():
         _raise(400, "missing_param_key", "缺少参数名")
+    if target and (key.strip() not in _CHAT_CLI_PARAMS or resolved_cli_type == "deepseek"):
+        _raise(400, "invalid_chat_cli_param", "请使用该聊天工具的模型和思考深度设置")
 
     try:
         await manager.set_bot_cli_param(alias, resolved_cli_type, key.strip(), value)
     except ValueError as exc:
         _raise(400, "invalid_param_value", str(exc))
 
-    return await asyncio.to_thread(get_cli_params_payload, manager, alias, resolved_cli_type)
+    return await asyncio.to_thread(get_cli_params_payload, manager, alias, resolved_cli_type, target=target)
 
 
+@with_chat_target
 async def update_deepseek_selection(
     manager: MultiBotManager,
     alias: str,
@@ -2128,10 +2159,12 @@ async def update_deepseek_selection(
     model: Any = None,
     reasoning_effort: Any = None,
     agent_id: str = "main",
+    target: ChatTarget | None = None,
 ) -> dict[str, Any]:
     """Validate and persist the DeepSeek selection as one user-visible update."""
-    profile = get_profile_or_raise(manager, alias)
-    if str(profile.cli_type or "").strip().lower() != "deepseek":
+    profile = target.profile if target else get_profile_or_raise(manager, alias)
+    _settings_cli_type(profile, "deepseek", target)
+    if profile.cli_type != "deepseek":
         _raise(400, "invalid_cli_type", "只有 DeepSeek Bot 支持 provider 选择")
 
     catalog = await asyncio.to_thread(
@@ -2157,7 +2190,7 @@ async def update_deepseek_selection(
     except ValueError as exc:
         _raise(400, "invalid_deepseek_selection", str(exc))
 
-    payload = await asyncio.to_thread(get_cli_params_payload, manager, alias, "deepseek")
+    payload = await asyncio.to_thread(get_cli_params_payload, manager, alias, "deepseek", target=target)
     provider_changed = bool(selection_result.get("provider_changed"))
     payload.update(
         {
@@ -2742,22 +2775,12 @@ def _select_conversation_locked(
         _raise(409, "conversation_cli_type_mismatch", "会话的 CLI 类型与当前执行配置不一致")
 
     conversation_execution_mode = _ensure_conversation_execution_mode(conversation, requested_execution_mode)
-    native_provider = cli_data_provider(str(conversation.get("native_provider") or profile.cli_type))
-    native_session_id = str(conversation.get("native_session_id") or "").strip()
     if previous_conversation_id and previous_conversation_id != str(conversation["id"]):
         _invalidate_codex_server_voice(session, previous_conversation_id)
     with session._lock:
         session.active_conversation_id = str(conversation["id"])
         _clear_all_native_sessions_locked(session)
-        if native_provider == "codex":
-            session.codex_session_id = native_session_id or None
-        if native_provider == "claude":
-            session.claude_session_id = native_session_id or None
-            session.claude_session_initialized = bool(native_session_id)
-        if native_provider == "antigravity":
-            session.antigravity_conversation_id = native_session_id or None
-        if native_provider == "deepseek":
-            session.deepseek_session_id = native_session_id or None
+        restore_conversation_binding(profile, session, conversation)
     session.persist()
     if session.storage_scope == "main" and str(conversation["id"]) != previous_conversation_id:
         _retire_cluster_child_conversations(manager, alias, user_id, previous_conversation_id)
@@ -5268,8 +5291,16 @@ def _parse_codex_event_dict(event: dict[str, Any]) -> dict[str, Optional[str]]:
 
 
 class _StreamPreviewState:
-    def __init__(self, cli_type: str):
+    def __init__(self, cli_type: str, *, named_chat: bool = False, plain_stdout: bool = False):
         self.cli_type = cli_type
+        self.terminal_failed = False
+        self.diagnostic_event = False
+        self.saw_diagnostic = False
+        # DeepSeek's parser already keeps diagnostics separate from its message body.
+        self._assistant_output = (
+            _BoundedOutputBuffer(_CLI_OUTPUT_LIMITS.final_text_max_bytes) if named_chat and cli_type != "deepseek" else None
+        )
+        self.plain_stdout = named_chat and plain_stdout
         parser_type = (
             CodexJsonStreamParser
             if cli_data_provider(cli_type) == "codex"
@@ -5290,11 +5321,40 @@ class _StreamPreviewState:
         *,
         parsed_event: dict[str, Any] | None = None,
     ) -> dict[str, Optional[str]]:
-        return self._parser.consume_line(str(chunk or ""), parsed_event=parsed_event)
+        if self.plain_stdout:
+            self._assistant_output.append(chunk)
+            return {}
+        parsed = self._parser.consume_line(str(chunk or ""), parsed_event=parsed_event)
+        event = parsed_event or {}
+        claude_error = self.cli_type == "claude" and (
+            event.get("is_error") or str(event.get("subtype") or "").startswith("error")
+            or (event.get("type") == "assistant" and event.get("error"))
+        )
+        self.diagnostic_event = bool(parsed.get("error_text") or claude_error)
+        self.saw_diagnostic |= self.diagnostic_event
+        if event.get("type") == "turn.failed" or claude_error:
+            self.terminal_failed = True
+        if self._assistant_output is not None and not self.diagnostic_event:
+            if parsed.get("completed_text"):
+                self._assistant_output.replace(parsed["completed_text"])
+            elif parsed.get("delta_text"):
+                self._assistant_output.append(parsed["delta_text"])
+        return parsed
+
+    @property
+    def assistant_text(self) -> str:
+        if self.plain_stdout:
+            return ""
+        return self._assistant_output.text() if self._assistant_output is not None else (self._parser.preview_text or "")
+
+    def named_reply(self, *, successful_exit: bool) -> str:
+        if self.plain_stdout and successful_exit:
+            return self._assistant_output.text().strip()
+        return self.assistant_text
 
     def status_event(self, *, elapsed_seconds: int) -> dict[str, Any]:
         event: dict[str, Any] = {"type": "status", "elapsed_seconds": elapsed_seconds}
-        preview_text = self._parser.preview_text
+        preview_text = self.assistant_text
         if preview_text:
             event["preview_text"] = preview_text[-800:]
             if self.cli_type == "antigravity":
@@ -5836,6 +5896,11 @@ class _BoundedOutputBuffer:
             return f"[前序输出已截断]\n{value}"
         return value
 
+    def replace(self, text: str) -> None:
+        self._data.clear()
+        self.truncated = False
+        self.append(text)
+
 
 class _ProcessStdoutReader:
     def __init__(
@@ -6318,8 +6383,12 @@ async def _stream_cli_chat(
     total_started_at = time.perf_counter()
     user_id = chat_session_user_id(user_id)
     profile, agent, session = target or get_chat_session_for_alias(manager, alias, user_id, agent_id)
-    if profile_override is not None:
-        profile = copy.deepcopy(profile_override)
+    # A named target is already detached. Snapshot the other entry points before input
+    # preparation so native binding, provider metadata and launch use the same settings.
+    if profile_override is not None or cli_params_override is not None or not session.web_session_id:
+        profile = copy.deepcopy(profile_override or profile)
+        if cli_params_override is not None:
+            profile.cli_params = copy.deepcopy(cli_params_override)
     cli_type = normalize_cli_type(profile.cli_type)
     remote_chat = None
     if getattr(profile, "remote_workspace", None):
@@ -6373,9 +6442,15 @@ async def _stream_cli_chat(
         env["TCB_CLUSTER_ACTIVE"] = "1"
         env["TCB_CLUSTER_BOT_ALIAS"] = alias
         env["TCB_CLUSTER_USER_ID"] = str(user_id)
-    resolved_cli = resolve_cli_executable(profile.cli_path, session.working_dir)
-    if resolved_cli is None:
-        _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
+    public_cli = cli_type if session.web_session_id else profile.cli_path
+    named_failure = f"{cli_type} 执行失败，请检查该工具的配置和运行状态"
+    separate_stderr = bool(session.web_session_id) or cli_type in {"antigravity", "deepseek"}
+    if session.selected_cli_type is not None:
+        resolved_cli = require_chat_cli_executable(profile.cli_path, cli_type, session.working_dir)
+    else:
+        resolved_cli = resolve_cli_executable(profile.cli_path, session.working_dir)
+        if resolved_cli is None:
+            _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=public_cli))
 
     with session._lock:
         _require_update_admission()
@@ -6410,6 +6485,7 @@ async def _stream_cli_chat(
     completion_started = False
     persistence_buffer = None
     preview_state = None
+    deepseek_attempt: CliAttemptState | None = None
     stderr_output = ""
     try:
         translation_config = translation_snapshot(
@@ -6439,12 +6515,17 @@ async def _stream_cli_chat(
             session._execution_turn_id = turn_handle.turn_id
         if cli_type == "deepseek":
             conversation = service.store.get_conversation(turn_handle.conversation_id)
-            binding = str(conversation.get("native_session_id") or "").strip() or None
             with session._lock:
-                binding_changed = session.deepseek_session_id != binding
-                session.deepseek_session_id = binding
-            if binding_changed:
+                previous_binding = session.deepseek_session_id
+                restore_conversation_binding(profile, session, conversation)
+                deepseek_attempt = _prepare_cli_attempt_state(session, cli_type)
+            if session.deepseek_session_id != previous_binding:
                 session.persist()
+            stored_deepseek_meta = conversation.get("native_session_meta") or {}
+            deepseek_meta = {
+                **stored_deepseek_meta,
+                "deepseek_provider": normalize_deepseek_value(profile.cli_params.get_param("deepseek", "provider")),
+            }
         persist_input = not bool(getattr(turn_handle, "reused", False))
         pending_translation = input_translation_pending(text, input_translation_config) if persist_input else None
         if pending_translation is not None:
@@ -6501,10 +6582,10 @@ async def _stream_cli_chat(
 
         for attempt_index in range(max_attempts):
             check_chat_stopped(session)
-            attempt = _prepare_cli_attempt_state(session, cli_type)
+            attempt = deepseek_attempt or _prepare_cli_attempt_state(session, cli_type)
             params_for_attempt = _effective_cli_params(
                 profile,
-                cli_params_override or profile.cli_params,
+                profile.cli_params,
                 cluster_run_id,
                 allow_unsafe_cli=allow_unsafe_cli,
             )
@@ -6521,6 +6602,14 @@ async def _stream_cli_chat(
             turn_cost = CliTurnCost(cli_data_provider(cli_type), turn_model)
             if cli_type == "codex_server":
                 from bot.codex_server.runtime import CodexServerRuntimeRequest, get_codex_server_registry
+                # Compare the configured flags before adding the host's own MCP arguments.
+                requires_unsafe = False
+                if allow_unsafe_cli:
+                    configured = with_global_extra_args(profile.cli_params, config.CLI_GLOBAL_EXTRA_ARGS)
+                    restricted = clamp_unsafe_cli_params(configured, allow_unsafe_cli=False)
+                    requires_unsafe = configured.codex_server != restricted.codex_server
+                with session._lock:
+                    session._steer_requires_unsafe_cli = requires_unsafe
                 server_env = dict(env)
                 if cluster_run_id:
                     from bot.cluster.setup import get_cluster_mcp_config_path
@@ -6529,16 +6618,21 @@ async def _stream_cli_chat(
                     env=server_env,
                     command=[resolved_cli, "app-server", "--stdio", *params_for_attempt.get_params(cli_type).get("extra_args", [])],
                 )
-                server_runtime = await get_codex_server_registry().open_or_create(CodexServerRuntimeRequest(
-                    owner_key=_codex_server_owner(session),
-                    conversation_id=turn_handle.conversation_id,
-                    command=resolved_cli,
-                    cwd=session.working_dir,
-                    env=server_env,
-                    params_config=params_for_attempt,
-                    thread_id=str(attempt.cli_session_id or ""),
-                    experimental_api=False,
-                ))
+                try:
+                    server_runtime = await get_codex_server_registry().open_or_create(CodexServerRuntimeRequest(
+                        owner_key=_codex_server_owner(session),
+                        conversation_id=turn_handle.conversation_id,
+                        command=resolved_cli,
+                        cwd=session.working_dir,
+                        env=server_env,
+                        params_config=params_for_attempt,
+                        thread_id=str(attempt.cli_session_id or ""),
+                        experimental_api=False,
+                    ))
+                except Exception:
+                    if session.web_session_id:
+                        _raise(400, "cli_launch_failed", "Codex app-server 启动失败，请检查工具安装和参数配置")
+                    raise
                 check_chat_stopped(session)
                 server_reader = _CodexServerOutputReader(server_runtime, prompt_text, output_queue)
                 active_server_reader = server_reader
@@ -6560,7 +6654,8 @@ async def _stream_cli_chat(
                         task_mode=request.task_mode if request is not None else "standard",
                     )
                 except ValueError as exc:
-                    _raise(400, "invalid_cli_command", str(exc))
+                    detail = f"{cli_type} 启动参数无效，请检查工具配置" if session.web_session_id else str(exc)
+                    _raise(400, "invalid_cli_command", detail)
 
                 quota_capture = None
                 if cli_type == "codex":
@@ -6578,7 +6673,7 @@ async def _stream_cli_chat(
                         cmd,
                         stdin=subprocess.PIPE if use_stdin else None,
                         stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE if cli_type in {"antigravity", "deepseek"} else subprocess.STDOUT,
+                        stderr=subprocess.PIPE if separate_stderr else subprocess.STDOUT,
                         text=True,
                         bufsize=1,
                         cwd=session.working_dir,
@@ -6594,7 +6689,7 @@ async def _stream_cli_chat(
                         process,
                         contain_process_tree=not deepseek_windows_process,
                     )
-                    if cli_type in {"antigravity", "deepseek"}:
+                    if separate_stderr:
                         process_lifecycle.stderr_reader = _start_process_stderr_reader(process)
                     active_lifecycle = process_lifecycle
                     with session._lock:
@@ -6634,7 +6729,11 @@ async def _stream_cli_chat(
                         cluster_run_id=cluster_run_id,
                     )
                 except FileNotFoundError:
-                    _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
+                    _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=public_cli))
+                except OSError:
+                    if session.web_session_id:
+                        _raise(400, "cli_launch_failed", f"{cli_type} 启动失败，请检查工具安装和执行权限")
+                    raise
 
                 if use_stdin:
                     check_chat_stopped(session)
@@ -6673,7 +6772,11 @@ async def _stream_cli_chat(
             else:
                 stdout_reader = _start_process_stdout_reader(process, output_queue)
                 process_lifecycle.reader = stdout_reader
-            preview_state = _StreamPreviewState(cli_type)
+            plain_stdout = cli_type in {"codex", "claude"} and (
+                (not use_stdin and prompt_text.startswith("/") and len(prompt_text.split()) == 1)
+                or not params_for_attempt.get_param(cli_type, "json_output" if cli_type == "codex" else "stream_json")
+            )
+            preview_state = _StreamPreviewState(cli_type, named_chat=bool(session.web_session_id), plain_stdout=plain_stdout)
             persistence_buffer = StreamingPersistenceBuffer(
                 service,
                 turn_handle,
@@ -6800,6 +6903,8 @@ async def _stream_cli_chat(
 
             def append_live_trace_event(trace_event: dict[str, Any]) -> dict[str, Any] | None:
                 nonlocal live_trace_truncated
+                if session.web_session_id and trace_event.get("kind") == "error":
+                    trace_event = {"kind": "error", "source": cli_type, "summary": named_failure}
                 event_key = _trace_event_key(trace_event)
                 if event_key in live_trace_event_keys:
                     return None
@@ -6846,6 +6951,10 @@ async def _stream_cli_chat(
 
                         text_chunk = str(item)
                         output_bytes += len(text_chunk.encode("utf-8", errors="replace"))
+                        if preview_state.plain_stdout:
+                            # A successful plain answer may itself be JSON. It is never a protocol event.
+                            preview_state.consume(text_chunk)
+                            continue
                         parsed_stream_event: dict[str, Any] | None = None
                         stripped_chunk = text_chunk.strip()
                         if stripped_chunk:
@@ -6866,27 +6975,33 @@ async def _stream_cli_chat(
                                 attempt.cli_session_id = parsed_preview.session_id
                         elif cli_type == "deepseek":
                             received_session_id = preview_state.result().session_id
-                            if received_session_id and received_session_id != session.deepseek_session_id:
+                            if received_session_id and (
+                                received_session_id != session.deepseek_session_id or stored_deepseek_meta != deepseek_meta
+                            ):
+                                service.store.set_conversation_native_session(
+                                    turn_handle.conversation_id, received_session_id, deepseek_meta,
+                                )
+                                stored_deepseek_meta = deepseek_meta
                                 with session._lock:
                                     session.deepseek_session_id = received_session_id
                                 session.persist()
-                                service.store.set_conversation_native_session(turn_handle.conversation_id, received_session_id)
                             if received_session_id:
                                 attempt.cli_session_id = received_session_id
                         turn_cost.observe(text_chunk, parsed_event=parsed_stream_event)
-                        trace_events = (
-                            consume_stream_trace_event(
+                        if session.web_session_id and preview_state.diagnostic_event:
+                            trace_events = [{"kind": "error", "source": cli_type, "summary": named_failure}]
+                        elif parsed_stream_event is not None:
+                            trace_events = consume_stream_trace_event(
                                 cli_data_provider(cli_type),
                                 parsed_stream_event,
                                 trace_state,
                             )
-                            if parsed_stream_event is not None
-                            else consume_stream_trace_chunk(
+                        else:
+                            trace_events = consume_stream_trace_chunk(
                                 cli_data_provider(cli_type),
                                 text_chunk,
                                 trace_state,
                             )
-                        )
                         for trace_event in trace_events:
                             appended_trace = append_live_trace_event(trace_event)
                             if appended_trace is not None and include_trace:
@@ -7111,7 +7226,7 @@ async def _stream_cli_chat(
                             active_server_reader = None
                         else:
                             await _cleanup_cli_process_lifecycle(process_lifecycle, abort=cleanup_abort)
-                            if cli_type in {"antigravity", "deepseek"} and process_lifecycle.stderr_reader is not None:
+                            if separate_stderr and process_lifecycle.stderr_reader is not None:
                                 stderr_output = process_lifecycle.stderr_reader.text
                     finally:
                         with session._lock:
@@ -7183,6 +7298,8 @@ async def _stream_cli_chat(
                 if returncode != 0:
                     error_detail = response
 
+            if session.web_session_id and returncode and stderr_output and not error_detail:
+                error_detail = response = stderr_output
             response = response or msg("chat", "no_output")
             should_force_error_output = False
             antigravity_failed = bool(
@@ -7197,7 +7314,7 @@ async def _stream_cli_chat(
             deepseek_failed = bool(
                 cli_type == "deepseek" and (parsed_result.terminal_error or returncode != 0)
             )
-            terminal_failed = antigravity_failed or deepseek_failed
+            terminal_failed = antigravity_failed or deepseek_failed or (bool(session.web_session_id) and preview_state.terminal_failed)
 
             if (
                 cli_type == "claude"
@@ -7253,6 +7370,14 @@ async def _stream_cli_chat(
                 session_id_changed = False
 
             elapsed_seconds = _calculate_elapsed_seconds(loop, started_at)
+            if session.web_session_id:
+                # Parser fallbacks include diagnostics. Only the assistant's projection can
+                # become a shared reply, including when Stop normalizes the exit code.
+                response = preview_state.named_reply(successful_exit=returncode == 0 and not session.stop_requested)
+                if cli_type == "claude":
+                    response = strip_claude_done_sentinel(response, getattr(done_session, "sentinel", None))
+                terminal_failed = terminal_failed or (preview_state.saw_diagnostic and not response)
+                error_detail = ""
             completion_state = _resolve_completion_state(
                 session,
                 returncode=returncode,
@@ -7261,6 +7386,11 @@ async def _stream_cli_chat(
             )
             if cli_type == "deepseek" and session.stop_requested and parsed_result.terminal_status != "completed":
                 completion_state = "cancelled"
+            if session.web_session_id and completion_state == "error":
+                error_detail = named_failure
+                response = "\n\n".join(part for part in (error_detail, response) if part)
+            elif session.web_session_id and completion_state == "completed" and not response:
+                response = msg("chat", "no_output")
             display_response = _format_cli_error_display(
                 response,
                 returncode=returncode,
@@ -7280,18 +7410,22 @@ async def _stream_cli_chat(
                 persistence_buffer.queue_trace(trace_event)
             await persistence_buffer.close()
             sqlite_flush_count = persistence_buffer.flush_count
-            native_session_id = _current_native_session_id(session, cli_type)
+            native_session_id = deepseek_attempt.cli_session_id if deepseek_attempt else _current_native_session_id(session, cli_type)
             trace_started_at = time.perf_counter()
-            await _reconcile_native_trace_before_completion(
-                service,
-                turn_handle,
-                profile=profile,
-                session=session,
-                user_text=execution_text,
-                assistant_text=display_response,
-                completion_state=completion_state,
-                native_session_id=native_session_id,
-            )
+            if session.web_session_id and preview_state.saw_diagnostic:
+                # A native transcript may include the diagnostic that was removed from the Web trace.
+                service.store.mark_trace_recovery_attempted(turn_handle.turn_id, status="kept_existing")
+            else:
+                await _reconcile_native_trace_before_completion(
+                    service,
+                    turn_handle,
+                    profile=profile,
+                    session=session,
+                    user_text=execution_text,
+                    assistant_text=display_response,
+                    completion_state=completion_state,
+                    native_session_id=native_session_id,
+                )
             stage_durations["trace_ms"] += max(0, int(round((time.perf_counter() - trace_started_at) * 1000)))
             fallback_output = (
                 display_response
@@ -7420,17 +7554,22 @@ async def _stream_cli_chat(
                    "output": "", "message": done_message, "returncode": -1, "elapsed_seconds": 0,
                    "session": build_session_snapshot(profile, session)}
     except Exception as exc:
-        if cli_type not in {"codex_server", "deepseek"} or turn_handle is None or turn_completed or completion_started:
+        if (not session.web_session_id and cli_type not in {"codex_server", "deepseek"}
+                or turn_handle is None or turn_completed or completion_started):
             raise
         if active_server_reader is not None:
             await active_server_reader.close(abort=True)
             active_server_reader = None
         if persistence_buffer is not None:
             await persistence_buffer.close()
-        failure_output = str(exc)
         failure_detail = str(exc)
+        if session.web_session_id and not (isinstance(exc, WebApiError) and exc.code in {
+            "cli_launch_failed", "invalid_cli_command", "cli_not_found",
+        }):
+            failure_detail = named_failure
+        failure_output = failure_detail
         failure_usage = None
-        failure_session_id = _current_native_session_id(session, cli_type)
+        failure_session_id = deepseek_attempt.cli_session_id if deepseek_attempt else _current_native_session_id(session, cli_type)
         if cli_type == "deepseek":
             if active_lifecycle is not None:
                 await _cleanup_cli_process_lifecycle(active_lifecycle, abort=True)
@@ -7439,8 +7578,9 @@ async def _stream_cli_chat(
                 active_lifecycle = None
                 with session._lock:
                     session.process = None
-            failure_detail = "\n".join(part for part in (str(exc), str(stderr_output or "").strip()) if part)
-            partial_text = preview_state._parser.preview_text if preview_state is not None else ""
+            if not session.web_session_id:
+                failure_detail = "\n".join(part for part in (str(exc), str(stderr_output or "").strip()) if part)
+            partial_text = preview_state.assistant_text if preview_state is not None else ""
             failure_output = "\n\n".join(part for part in (failure_detail, partial_text) if part)
             if preview_state is not None:
                 failure_usage = _build_deepseek_context_usage(
@@ -7595,6 +7735,7 @@ async def steer_chat(
     session_epoch: int | str | None = None,
     codex_turn_id: str = "",
     request_id: str = "",
+    allow_unsafe_cli: bool = False,
     target: ChatTarget | None = None,
 ) -> dict[str, Any]:
     """Append input to the active codex app-server turn without opening a reader."""
@@ -7631,6 +7772,9 @@ async def steer_chat(
     with session._lock:
         if not session.is_processing:
             _raise(409, "steering_turn_done", "当前 turn 已结束")
+        if session._steer_requires_unsafe_cli and not allow_unsafe_cli:
+            _raise(403, "unsafe_steering_forbidden", "当前任务使用高权限 CLI，追加消息需要相应权限")
+        execution_id = session._execution_id
 
     history = _history_service_for_execution_mode(session, EXECUTION_MODE_CLI)
     running_reply = await history.get_running_reply_async(session)
@@ -7680,11 +7824,12 @@ async def steer_chat(
         _raise(409, "steering_cancelled", "追加消息已取消")
 
     with session._lock:
-        if not session.is_processing:
+        if not session.is_processing or session._execution_id != execution_id:
             _raise(409, "steering_turn_done", "当前 turn 已结束")
+        if session._steer_requires_unsafe_cli and not allow_unsafe_cli:
+            _raise(403, "unsafe_steering_forbidden", "当前任务使用高权限 CLI，追加消息需要相应权限")
     try:
-        runtime_turn_id = _codex_server_steering_turn_id(registry, session, active_turn_id)
-        result = steer_owner(_codex_server_owner(session), runtime_turn_id, execution_text)
+        result = steer_owner(_codex_server_owner(session), observed_runtime_turn_id, execution_text)
         if inspect.isawaitable(result):
             await result
     except WebApiError:
@@ -7704,7 +7849,7 @@ async def steer_chat(
             code = "steering_turn_mismatch"
         else:
             code = "steering_failed"
-        _raise(409, code, message)
+        _raise(409, code, "无法向当前 Codex app-server 任务追加消息" if session.web_session_id else message)
 
     try:
         user_message = await history.append_user_message_to_turn_async(
@@ -7888,6 +8033,7 @@ def _endless_retryable_done_event(event: dict[str, Any]) -> bool:
 
 
 _ENDLESS_TERMINAL_ERROR_CODES = {
+    "chat_cli_unavailable",
     "cancelled",
     "canceled",
     "conversation_changed",

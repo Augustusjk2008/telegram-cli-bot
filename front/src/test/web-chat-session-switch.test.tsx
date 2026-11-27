@@ -1,10 +1,12 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { WebApiClientError } from "../services/types";
 import type { ChatMessage, ChatSessionSummary } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import { startConversationAfterCliSwitch } from "../utils/conversationEvents";
 
 const main = { id: "main", title: "主会话" };
 const research = { id: "ses_a", title: "调查" };
@@ -70,6 +72,111 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   window.localStorage.clear();
+});
+
+async function openCreateDialog() {
+  await screen.findByRole("option", { name: "新建聊天会话…" });
+  // jsdom lacks the native modal methods. Keep the stub local to this dialog.
+  const dialog = document.querySelector<HTMLDialogElement>('dialog[aria-label="新建聊天会话"]')!;
+  dialog.showModal ??= () => { dialog.open = true; };
+  dialog.close ??= () => { dialog.open = false; };
+  fireEvent.change(screen.getByRole("combobox", { name: "当前聊天会话" }), { target: { value: "" } });
+  return within(await screen.findByRole("dialog", { name: "新建聊天会话" }));
+}
+
+test("preselects the Bot default even when unavailable, retains a failed choice, and focuses the new session", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  await client.updateBotCli("main", "codex_server", "codex");
+  const catalog = await client.listChatSessions("main");
+  vi.spyOn(client, "listChatSessions").mockResolvedValue({
+    ...catalog, cliOptions: catalog.cliOptions.map((option) => ({ ...option, available: option.cliType !== "codex_server" })),
+  });
+  const create = vi.spyOn(client, "createChatSession").mockRejectedValueOnce(new Error("工具刚刚离线"));
+  render(<ChatScreen botAlias="main" client={client} />);
+  const dialog = await openCreateDialog();
+  const title = dialog.getByRole("textbox", { name: "聊天会话名称" });
+  expect(title).toHaveFocus();
+  await user.type(title, "Review");
+  await user.tab();
+  const tool = dialog.getByRole("combobox", { name: "AI 工具" });
+  expect(tool).toHaveFocus();
+  expect(tool).toHaveValue("codex_server");
+  expect(tool).toHaveAccessibleDescription(/不可用/);
+  expect(within(tool).getAllByRole("option")).toHaveLength(5);
+  expect(within(tool).getByRole("option", { name: /codex server.*不可用/ })).toBeDisabled();
+  const submit = dialog.getByRole("button", { name: "创建" });
+  expect(submit).toBeDisabled();
+  await user.selectOptions(tool, "claude");
+  await user.click(submit);
+  expect(await dialog.findByRole("alert")).toHaveTextContent("工具刚刚离线");
+  expect(title).toHaveValue("Review");
+  expect(tool).toHaveValue("claude");
+  expect(tool).toHaveFocus();
+  expect(create).toHaveBeenCalledTimes(1);
+  await user.click(submit);
+  expect(create.mock.calls).toEqual([["main", "Review", "claude"], ["main", "Review", "claude"]]);
+  const selector = await screen.findByRole("combobox", { name: "当前聊天会话" });
+  await waitFor(() => {
+    expect(selector).toHaveDisplayValue("Review · claude");
+    expect(selector).toHaveFocus();
+  });
+});
+
+test("creates with only the title on a phase-one host and returns focus after cancel", async () => {
+  const { root } = chatDirectory();
+  const create = vi.spyOn(root.client, "createChatSession").mockResolvedValue(review);
+  render(<ChatScreen botAlias="main" client={root.client} mobileLayout />);
+  const first = await openCreateDialog();
+  expect(first.queryByRole("combobox", { name: "AI 工具" })).not.toBeInTheDocument();
+  fireEvent.click(first.getByRole("button", { name: "取消" }));
+  expect(screen.getByRole("combobox", { name: "当前聊天会话" })).toHaveFocus();
+  const dialog = await openCreateDialog();
+  fireEvent.change(dialog.getByRole("textbox"), { target: { value: review.title } });
+  fireEvent.click(dialog.getByRole("button", { name: "创建" }));
+  await screen.findByText("复核历史");
+  expect(create.mock.calls).toEqual([["main", review.title]]);
+});
+
+test("keeps a pinned chat's draft and DeepSeek controls when the Bot's default is changed", async () => {
+  const client = new MockWebBotClient();
+  const pinned = await client.createChatSession("main", "Pinned", "deepseek");
+  const params = vi.spyOn(client, "getCliParams");
+  const upload = vi.spyOn(client, "uploadChatAttachment");
+  render(<ChatScreen botAlias="main" client={client} />);
+  await choose(pinned);
+  await waitFor(() => expect(params).toHaveBeenLastCalledWith("main", "deepseek"));
+  typeDraft("keep this draft");
+  await act(async () => {
+    await client.updateBotCli("main", "antigravity", "agy");
+    await startConversationAfterCliSwitch(client, "main", "antigravity");
+  });
+  const selector = screen.getByRole("combobox", { name: "当前聊天会话" });
+  expect(selector).toHaveDisplayValue("Pinned · DeepSeek Harness");
+  expect(within(selector).getByRole("option", { name: /主会话.*Antigravity CLI.*Bot 默认/ })).toBeInTheDocument();
+  expect(screen.getByPlaceholderText("输入消息")).toHaveValue("keep this draft");
+  expect(params).toHaveBeenLastCalledWith("main", "deepseek");
+  fireEvent.change(screen.getByTestId("chat-attachment-input"), { target: { files: [new File(["img"], "img.png")] } });
+  await screen.findByText("DeepSeek Harness 暂不支持图片或语音附件");
+  expect(upload).not.toHaveBeenCalled();
+  expect((await openCreateDialog()).getByRole("combobox", { name: "AI 工具" })).toHaveValue("antigravity");
+});
+
+test("refreshes an inherited chat's controls from its own overview after a Bot settings switch", async () => {
+  const client = new MockWebBotClient();
+  const inherited = await client.createChatSession("main", "Legacy");
+  const params = vi.spyOn(client, "getCliParams");
+  render(<ChatScreen botAlias="main" client={client} />);
+  await choose(inherited);
+  await waitFor(() => expect(params).toHaveBeenLastCalledWith("main", inherited.effectiveCliType));
+  typeDraft("inherited draft");
+  await act(async () => {
+    await client.updateBotCli("main", "deepseek", "dsh");
+    await startConversationAfterCliSwitch(client, "main", "deepseek");
+  });
+  await waitFor(() => expect(params).toHaveBeenLastCalledWith("main", "deepseek"));
+  expect(screen.getByRole("combobox", { name: "当前聊天会话" })).toHaveDisplayValue("Legacy · DeepSeek Harness（Bot 默认）");
+  expect(screen.getByPlaceholderText("输入消息")).toHaveValue("inherited draft");
 });
 
 test("switches between two running sessions, restores each draft and drains the queue only in its owning session", async () => {

@@ -6,6 +6,7 @@ import threading
 from typing import Any, Callable
 
 from bot.cli import cli_data_provider
+from bot.cli_params import normalize_deepseek_value
 from bot.models import BotProfile, UserSession
 from bot.web.async_chat_store import AsyncChatStore
 from bot.web.chat_store import ChatStore, ChatTurnHandle, is_cli_history_provider
@@ -24,6 +25,26 @@ def _session_epoch(session: UserSession) -> int:
 
 def _active_conversation_id(session: UserSession) -> str:
     return str(getattr(session, "active_conversation_id", "") or "").strip()
+
+
+def restore_conversation_binding(profile: BotProfile, session: UserSession, conversation: dict[str, Any]) -> None:
+    """Restore the native thread belonging to this conversation. Caller holds the session lock."""
+    provider = cli_data_provider(str(conversation.get("native_provider") or profile.cli_type))
+    native_id = str(conversation.get("native_session_id") or "").strip() or None
+    if provider == "codex":
+        session.codex_session_id = native_id
+    elif provider == "claude":
+        session.claude_session_id = native_id
+        session.claude_session_initialized = bool(native_id)
+    elif provider == "antigravity":
+        session.antigravity_conversation_id = native_id
+    elif provider == "deepseek":
+        meta = conversation.get("native_session_meta") or {}
+        if "deepseek_provider" in meta:
+            selected_provider = normalize_deepseek_value(profile.cli_params.get_param("deepseek", "provider"))
+            if meta["deepseek_provider"] != selected_provider:
+                native_id = None
+        session.deepseek_session_id = native_id
 
 
 class StreamingPersistenceBuffer:
@@ -568,15 +589,8 @@ class ChatHistoryService:
             except KeyError:
                 active_provider = ""
                 active_cli_type = ""
-            if str(active_provider or "").strip().lower() != str(native_provider or "").strip().lower():
-                with session._lock:
-                    session.active_conversation_id = None
-                session.persist()
-                active_conversation_id = ""
-            elif active_cli_type and active_cli_type != str(profile.cli_type or "").strip().lower():
-                with session._lock:
-                    session.active_conversation_id = None
-                session.persist()
+            if (cli_data_provider(active_provider) != native_provider
+                    or (active_cli_type and active_cli_type != profile.cli_type)):
                 active_conversation_id = ""
         had_active_conversation = bool(active_conversation_id)
         handle = self.store.begin_turn(
@@ -595,8 +609,11 @@ class ChatHistoryService:
             actor=actor,
         )
         if not had_active_conversation:
+            conversation = self.store.get_conversation(handle.conversation_id) if session.web_session_id else None
             with session._lock:
                 session.active_conversation_id = handle.conversation_id
+                if conversation is not None:
+                    restore_conversation_binding(profile, session, conversation)
             session.persist()
         return handle
 
@@ -865,13 +882,13 @@ class ChatHistoryService:
                 context = {}
             conversation_id = str(context.get("conversation_id") or "")
             if conversation_id:
-                deepseek_conversation = None
-                if cli_data_provider(profile.cli_type) == "deepseek" and context.get("native_provider") == "deepseek":
-                    deepseek_conversation = self.store.get_conversation(conversation_id)
+                conversation = None
+                if session.web_session_id or cli_data_provider(profile.cli_type) == "deepseek":
+                    conversation = self.store.get_conversation(conversation_id)
                 with session._lock:
                     session.active_conversation_id = conversation_id
-                    if deepseek_conversation is not None:
-                        session.deepseek_session_id = str(deepseek_conversation.get("native_session_id") or "").strip() or None
+                    if conversation is not None and conversation.get("cli_type") == profile.cli_type:
+                        restore_conversation_binding(profile, session, conversation)
                 session.persist()
         recovery_contexts: list[dict[str, Any]] = []
         for item in items:
@@ -1065,7 +1082,7 @@ class ChatHistoryService:
         return {
             "bot_alias": profile.alias,
             "cli_type": profile.cli_type,
-            "cli_path": profile.cli_path,
+            **({} if session.web_session_id else {"cli_path": profile.cli_path}),
             "working_dir": session.working_dir,
             "message_count": session.message_count,
             "history_count": history_count,

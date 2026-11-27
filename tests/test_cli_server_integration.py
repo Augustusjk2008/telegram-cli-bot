@@ -11,6 +11,7 @@ import pytest
 from bot.manager import MultiBotManager
 from bot.models import AgentProfile, BotProfile
 from bot.web import api_service
+from bot.web.chat_targets import create_chat_session, resolve_named_chat_target
 from bot.web.api_common import WebApiError
 
 
@@ -132,6 +133,27 @@ async def test_server_start_failure_completes_turn_once(server_chat):
     assert "--unknown" in events[0]["output"]
     assert events[0]["message"]["meta"]["completion_state"] == "error"
     assert not api_service.get_session_for_alias(manager, "main", 1001).is_processing
+
+
+@pytest.mark.asyncio
+async def test_named_server_overview_and_failed_launch_keep_settings_private(server_chat, tmp_path):
+    manager, _, registry = server_chat
+    profile = manager.main_profile
+    private_exe = tmp_path / "private-installation"
+    private_exe.touch()
+    profile.cli_path = str(private_exe)
+    profile.cli_params.set_param("codex_server", "extra_args", ["--private-flag", "private-value"])
+    item = create_chat_session(manager, "main", 1, "Review", cli_type="codex_server")
+    profile.cli_type = "claude"
+    target = resolve_named_chat_target(manager, "main", 1, item["id"])
+    overview = api_service.get_overview(manager, "main", 1, target=target)
+    assert overview["bot"]["cli_type"] == "claude"
+    assert overview["session"]["cli_type"] == "codex_server"
+    registry.open_or_create.side_effect = ValueError(f"invalid --private-flag private-value in {private_exe}")
+    events = [event async for event in api_service.stream_chat(manager, "main", 1, "hello", target=target)]
+    assert events[-1]["message"]["meta"]["completion_state"] == "error"
+    for private in ("private-installation", "--private-flag", "private-value", "cli_path", "cli_params"):
+        assert private not in json.dumps([item, overview, events])
 
 
 @pytest.mark.asyncio

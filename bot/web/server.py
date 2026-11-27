@@ -2031,11 +2031,13 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        if set(body) != {"title"} or not isinstance(body["title"], str):
-            raise WebApiError(400, "invalid_chat_session", "仅支持字符串字段 title")
+        if body.keys() - {"title", "cli_type"} or not isinstance(body.get("title"), str):
+            raise WebApiError(400, "invalid_chat_session", "须提供会话名称 title，可选工具 cli_type")
+        if "cli_type" in body and not isinstance(body["cli_type"], str):
+            raise WebApiError(400, "invalid_cli_type", "请选择受支持的 AI 工具")
         user_id = self._chat_user_id(auth)
         data = await run_chat_store_io(
-            chat_targets.create_chat_session, self.manager, alias, user_id, body["title"],
+            chat_targets.create_chat_session, self.manager, alias, user_id, body["title"], body.get("cli_type"),
             write_key=f"{alias}:{user_id}:sessions",
         )
         return _json({"ok": True, "data": data})
@@ -2618,6 +2620,7 @@ class WebApiServer:
             session_epoch=raw_session_epoch,
             codex_turn_id=str(raw_codex_turn_id or ""),
             request_id=str(raw_request_id or ""),
+            allow_unsafe_cli=CAP_RUN_UNSAFE_CLI in auth.capabilities,
         )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
@@ -3824,10 +3827,11 @@ class WebApiServer:
         })
 
     async def get_cli_params(self, request: web.Request) -> web.Response:
-        await self._with_bot_config_access(request)
+        auth = await self._with_bot_config_access(request)
         alias = self._manager_alias(request)
         cli_type = request.query.get("cli_type") or None
-        data = await asyncio.to_thread(get_cli_params_payload, self.manager, alias, cli_type)
+        scope = await self._chat_request_scope(request, alias, auth) if "session_id" in request.match_info else {}
+        data = await asyncio.to_thread(get_cli_params_payload, self.manager, alias, cli_type, target=scope.get("target"))
         return _json({"ok": True, "data": data})
 
     async def patch_cli_params(self, request: web.Request) -> web.Response:
@@ -3835,8 +3839,12 @@ class WebApiServer:
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         selection = body.get("selection")
+        scope = await self._chat_request_scope(request, alias, auth, body) if "session_id" in request.match_info else {}
+        target = scope.get("target")
         if isinstance(selection, dict) and str(body.get("cli_type") or "").strip().lower() == "deepseek":
             selection_agent_id = selection.get("agent_id", selection.get("agentId"))
+            if target and selection_agent_id not in (None, "", "main"):
+                raise WebApiError(400, "invalid_agent_id", "命名聊天仅支持 main")
             data = await update_deepseek_selection(
                 self.manager,
                 alias=alias,
@@ -3851,6 +3859,7 @@ class WebApiServer:
                     "reasoning_effort",
                     selection.get("reasoningEffort"),
                 ),
+                target=target,
             )
             return _json({"ok": True, "data": data})
         data = await update_cli_params(
@@ -3859,6 +3868,7 @@ class WebApiServer:
             cli_type=body.get("cli_type"),
             key=str(body.get("key", "")),
             value=body.get("value"),
+            target=target,
         )
         return _json({"ok": True, "data": data})
 

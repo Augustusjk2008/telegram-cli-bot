@@ -1,4 +1,5 @@
 import { WebApiClientError } from "./types";
+import type { DeepSeekSelectionResponse } from "./types";
 import type { WebBotClient } from "./webBotClient";
 
 const chatMethods = new Set<keyof WebBotClient>([
@@ -14,6 +15,25 @@ const unsupportedMethods = new Set<keyof WebBotClient>([
   "updateClusterConfig", "connectCodexVoice", "resetSession",
 ]);
 
+const cliControlMethods = new Set<keyof WebBotClient>(["getCliParams", "updateCliParam", "updateDeepSeekSelection"]);
+const cliControlKeys = new Set(["model", "provider", "effort", "reasoning_effort"]);
+
+function controlFields<T>(fields: Record<string, T>): Record<string, T> {
+  return Object.fromEntries(Object.entries(fields).filter(([key]) => cliControlKeys.has(key)));
+}
+
+function chatCliControls(payload: DeepSeekSelectionResponse, legacy: boolean): DeepSeekSelectionResponse {
+  const { cliPath, diagnostic, catalogDiagnostic, ...controls } = payload;
+  return {
+    ...controls,
+    params: controlFields(payload.params),
+    defaults: controlFields(payload.defaults),
+    schema: controlFields(payload.schema),
+    ...(!legacy && diagnostic ? { diagnostic } : {}),
+    ...(!legacy && catalogDiagnostic ? { catalogDiagnostic } : {}),
+  };
+}
+
 /** A bound view shares its owner's account, workspace and notifications. Only chat
  * methods run on the session-specific receiver, including throughout async streams. */
 export function bindChatSession<T extends WebBotClient>(
@@ -22,6 +42,7 @@ export function bindChatSession<T extends WebBotClient>(
   botAlias: string,
   sessionId: string,
   createChatReceiver: () => T,
+  usesLegacyCliControls?: () => boolean,
 ): WebBotClient {
   if (sessionId === "main") return owner;
   if (!sessionId.trim() || sessionId === "." || sessionId === "..") {
@@ -44,9 +65,17 @@ export function bindChatSession<T extends WebBotClient>(
           throw new WebApiClientError("此会话不支持该操作", { code: "chat_session_unsupported", status: 409 });
         };
         bound = property === "connectCodexVoice" ? unsupported : async () => unsupported();
-      } else if (chatMethods.has(property)) {
+      } else if (chatMethods.has(property) || cliControlMethods.has(property)) {
         bound = async (alias: string, ...args: unknown[]) => {
           if (alias !== botAlias) throw new Error("聊天会话与 Bot 不匹配");
+          if (cliControlMethods.has(property)) {
+            if (property === "updateCliParam" && !cliControlKeys.has(String(args[0]))) {
+              throw new WebApiClientError("此会话不支持更改该参数", { status: 400, code: "invalid_chat_cli_param" });
+            }
+            const legacy = usesLegacyCliControls?.() === true;
+            const payload = await Reflect.apply(method, legacy ? target : chat, [alias, ...args]);
+            return chatCliControls(payload, legacy);
+          }
           return Reflect.apply(method, chat, [alias, ...args]);
         };
       } else {

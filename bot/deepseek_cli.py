@@ -10,7 +10,6 @@ import threading
 import time
 from typing import Any
 
-from bot import config
 from bot.platform.executables import build_executable_invocation
 from bot.platform.processes import build_hidden_process_kwargs
 
@@ -413,6 +412,8 @@ def discover_deepseek_catalog(
     force: bool = False,
 ) -> dict[str, Any]:
     """Discover a bounded, credential-free DeepSeek provider/model catalog."""
+    from bot.config import build_cli_environment
+
     fallback = _fallback_deepseek_catalog(params)
     command = _build_deepseek_catalog_command(resolved_cli)
     fingerprint = _deepseek_catalog_fingerprint(resolved_cli, working_dir)
@@ -440,7 +441,7 @@ def discover_deepseek_catalog(
                 errors="replace",
                 timeout=_DEEPSEEK_CATALOG_TIMEOUT_SECONDS,
                 check=False,
-                env=config.build_cli_environment(),
+                env=build_cli_environment(),
                 **build_hidden_process_kwargs(),
             )
             raw_stdout = completed.stdout or ""

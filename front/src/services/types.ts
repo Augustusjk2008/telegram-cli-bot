@@ -9,7 +9,8 @@ export type {
   ThemeIllustrationAssetImport,
 } from "../theme/types";
 
-export type CliType = "claude" | "codex" | "codex_server" | "antigravity" | "deepseek";
+export const CLI_TYPES = ["codex", "codex_server", "claude", "antigravity", "deepseek"] as const;
+export type CliType = typeof CLI_TYPES[number];
 export type ChatExecutionMode = "cli";
 export type BotStatus = "running" | "busy" | "unread" | "offline";
 export type BotServiceStatus = "online" | "offline";
@@ -1012,11 +1013,14 @@ export type ClusterConfigUpdateResult = {
 export type ChatSessionSummary = {
   id: string;
   title: string;
+  selectedCliType?: CliType | "unknown" | null;
+  effectiveCliType?: CliType | "unknown";
 };
 
 export type ChatSessionList = {
   enabled: boolean;
   items: ChatSessionSummary[];
+  cliOptions?: { cliType: CliType; available: boolean }[];
 };
 
 export type AgentScopedOptions = {

@@ -99,6 +99,9 @@ def _session_rank(session: UserSession) -> tuple[int, int, int, str]:
 
 def _merge_session_state(preferred: UserSession, fallback: UserSession, *, bot_id: int, bot_alias: str) -> UserSession:
     with preferred._lock, fallback._lock:
+        if preferred.web_session_id and preferred.selected_cli_type is None and preferred.selected_cli_path is None:
+            preferred.selected_cli_type = fallback.selected_cli_type
+            preferred.selected_cli_path = fallback.selected_cli_path
         working_dir = preferred.working_dir or fallback.working_dir
         conversation_id = preferred.active_conversation_id or fallback.active_conversation_id
         session_epoch = max(preferred.session_epoch, fallback.session_epoch)
@@ -178,6 +181,7 @@ def get_or_create_session(
 
 def create_web_chat_session(
     bot_id: int, bot_alias: str, user_id: int, working_dir: str, title: str,
+    *, selected_cli_type: str | None = None, selected_cli_path: str | None = None,
 ) -> UserSession:
     user_id = chat_session_user_id(user_id)
     bot_alias = normalize_session_bot_alias(bot_alias)
@@ -185,7 +189,10 @@ def create_web_chat_session(
         raise ValueError("missing named Web session owner")
     while True:
         session_id = "ses_" + uuid.uuid4().hex
-        if insert_web_session_snapshot(bot_id, user_id, session_id, working_dir, title, bot_alias=bot_alias):
+        if insert_web_session_snapshot(
+            bot_id, user_id, session_id, working_dir, title, bot_alias=bot_alias,
+            selected_cli_type=selected_cli_type, selected_cli_path=selected_cli_path,
+        ):
             return get_web_chat_session(bot_id, bot_alias, user_id, working_dir, session_id)
 
 
@@ -288,6 +295,8 @@ def _save_session_to_store(session: UserSession):
             agent_id=session.storage_scope,
             web_session_id=session.web_session_id,
             web_session_title=session.web_session_title,
+            selected_cli_type=session.selected_cli_type,
+            selected_cli_path=session.selected_cli_path,
             bot_alias=session.bot_alias,
             codex_session_id=session.codex_session_id,
             claude_session_id=session.claude_session_id,
@@ -385,6 +394,8 @@ def _build_session_from_store(
             agent_id=normalized_agent_id,
             web_session_id=web_session_id,
             web_session_title=str((stored_data or {}).get("web_session_title") or "") if web_session_id else "",
+            selected_cli_type=(stored_data or {}).get("selected_cli_type") if web_session_id else None,
+            selected_cli_path=(stored_data or {}).get("selected_cli_path") if web_session_id else None,
             browse_dir=browse_dir,
             history=[],
             codex_session_id=codex_session_id,

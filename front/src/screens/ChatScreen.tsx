@@ -50,6 +50,7 @@ import type {
   BotOverview,
   ChatAttachmentUploadResult,
   ChatSessionSummary,
+  ChatSessionList,
   ClusterAgentTask,
   ClusterSlotStatus,
   ClusterTeam,
@@ -1784,11 +1785,12 @@ type ChatRuntimeProps = Props & {
   client: WebBotClient;
   sessionId: string;
   sessionOptions: ChatSessionSummary[];
+  cliOptions?: ChatSessionList["cliOptions"];
   catalogNotice?: ReactNode;
   draft?: ChatDraft;
   focusSessionSelector: boolean;
   onSelectSession: (item: ChatSessionSummary, draft?: ChatDraft) => void;
-  onCreateSession?: (title: string) => Promise<ChatSessionSummary>;
+  onCreateSession?: (title: string, cliType?: CliType) => Promise<ChatSessionSummary>;
 };
 
 function ChatScreenView({
@@ -1797,6 +1799,7 @@ function ChatScreenView({
   client,
   sessionId,
   sessionOptions,
+  cliOptions,
   catalogNotice,
   draft,
   focusSessionSelector,
@@ -1823,6 +1826,7 @@ function ChatScreenView({
   mobileLayout = false,
 }: ChatRuntimeProps) {
   const isMainSession = sessionId === "main";
+  const inheritsBotCli = !sessionOptions.find((item) => item.id === sessionId)?.selectedCliType;
   const storageScope = accountId?.trim() || "";
   const planModeKey = planModeStorageKey(botAlias, storageScope, sessionId);
   const queueKey = useCallback((agentId: string) => (
@@ -1879,7 +1883,7 @@ function ChatScreenView({
   const cliParamsLoadRef = useRef<{
     client: WebBotClient;
     botAlias: string;
-    state: "loading" | "loaded";
+    cliType?: CliType;
   } | null>(null);
   const [historyPanelOpen, setHistoryPanelOpen] = useState(false);
   const [historyPanelTab, setHistoryPanelTab] = useState<ConversationHistoryPanelTab>("history");
@@ -2274,7 +2278,7 @@ function ChatScreenView({
     const request: NonNullable<typeof cliParamsLoadRef.current> = {
       client,
       botAlias,
-      state: "loading",
+      cliType: requestedCliType,
     };
     cliParamsLoadRef.current = request;
     setCliParams(null);
@@ -2286,7 +2290,6 @@ function ChatScreenView({
         if (cliParamsLoadRef.current !== request) {
           return;
         }
-        request.state = "loaded";
         setCliParams(payload);
       })
       .catch(() => {
@@ -2298,18 +2301,20 @@ function ChatScreenView({
       });
   }, [botAlias, client]);
 
+  const namedCliType = !isMainSession ? botOverview?.cliType : undefined;
   useEffect(() => {
     const current = cliParamsLoadRef.current;
-    const matchesScope = current?.client === client && current.botAlias === botAlias;
+    const matchesScope = current?.client === client && current.botAlias === botAlias
+      && (isMainSession || current.cliType === namedCliType);
     if (!matchesScope) {
       cliParamsLoadRef.current = null;
       setCliParams(null);
     }
-    if (!isForeground || matchesScope) {
+    if (!isForeground || matchesScope || (!isMainSession && !namedCliType)) {
       return;
     }
-    void loadCliParams();
-  }, [botAlias, client, isForeground, loadCliParams]);
+    void loadCliParams(namedCliType);
+  }, [botAlias, client, isForeground, isMainSession, namedCliType, loadCliParams]);
 
   const applyHistoryView = useCallback((
     messages: ChatMessage[],
@@ -3913,9 +3918,12 @@ function ChatScreenView({
   };
 
   useEffect(() => {
-    if (!isMainSession) return;
     const handleConversationCreated = (event: Event) => {
       if (isConversationCreatedEvent(event)) {
+        if (!isMainSession) {
+          if (inheritsBotCli && event.detail.botAlias === botAlias) void pollAssistantStateRef.current?.();
+          return;
+        }
         const followsMainChat = (
           event.detail.botAlias === botAlias
           && hasActivatedRef.current
@@ -3945,7 +3953,7 @@ function ChatScreenView({
     };
     window.addEventListener(CONVERSATION_CREATED_EVENT, handleConversationCreated);
     return () => window.removeEventListener(CONVERSATION_CREATED_EVENT, handleConversationCreated);
-  }, [botAlias, isMainSession, loadCliParams]);
+  }, [botAlias, inheritsBotCli, isMainSession, loadCliParams]);
 
   async function handleDeleteConversation(conversation: ConversationSummary, deleteNativeSession: boolean) {
     if (isStreamingRef.current) {
@@ -5228,6 +5236,8 @@ function ChatScreenView({
     : activeClusterAssignment?.name || activeAgent.name || botAlias;
   const childAgentReadOnly = activeAgentId !== "main";
   const chatMutationsDisabled = readOnly || childAgentReadOnly;
+  const canCreateChatSession = !chatMutationsDisabled && botOverview && botOverview.canOperate !== false
+    && (!botOverview.effectiveCapabilities || botOverview.effectiveCapabilities.includes("chat_send"));
   const chatDisabledReason = disabledReason || readOnlyReason || (readOnly ? "主机已关闭聊天，当前无法发送消息" : "");
   const killTaskDisabled = readOnly || (!isStreaming && !endlessModeActive) || actionLoading === "kill";
   const voiceEnabled = isMainSession && botOverview?.alias === botAlias
@@ -5583,13 +5593,15 @@ function ChatScreenView({
           sessionSelector={isVisible && sessionOptions.length > 0 && !botOverview?.remoteWorkspace ? (
             <ChatSessionSelector
               items={sessionOptions}
+              cliOptions={cliOptions}
               selectedId={sessionId}
+              activeCliType={botOverview?.cliType}
               focusOnMount={focusSessionSelector}
               onSelect={(item) => onSelectSession(item, childAgentReadOnly ? undefined : {
                 text: composerRef.current?.getDraft() || "",
                 attachments: pendingAttachments,
               })}
-              onCreate={chatMutationsDisabled || !botOverview || botOverview.canOperate === false ? undefined : onCreateSession}
+              onCreate={canCreateChatSession ? onCreateSession : undefined}
             />
           ) : undefined}
           embedded={embedded}
@@ -5940,7 +5952,7 @@ function BotChatSessions(props: Props) {
     // Load a saved named session only after the server confirms it is accessible.
     return supportsSessions && wantedId.current !== "main" ? null : "main";
   });
-  const [options, setOptions] = useState<ChatSessionSummary[]>([]);
+  const [catalog, setCatalog] = useState<ChatSessionList>({ enabled: false, items: [] });
   const [catalogIssue, setCatalogIssue] = useState<{ message: string; defaultOnly?: boolean } | null>(null);
   const [catalogAttempt, setCatalogAttempt] = useState(0);
   const drafts = useRef(new Map<string, ChatDraft>());
@@ -5950,7 +5962,7 @@ function BotChatSessions(props: Props) {
     if (!isVisible || !client.listChatSessions || !client.forChatSession) return;
     let sequence = 0;
     function showDefaultOnly() {
-      setOptions([]);
+      setCatalog({ enabled: false, items: [] });
       if (wantedId.current === "main") {
         setCatalogIssue(null);
         setSelectedId("main");
@@ -5973,7 +5985,7 @@ function BotChatSessions(props: Props) {
         const id = items.some((item) => item.id === wantedId.current) ? wantedId.current : "main";
         if (id !== wantedId.current) window.localStorage.removeItem(selectionKey);
         wantedId.current = id;
-        setOptions(items);
+        setCatalog(result);
         setSelectedId(id);
         setCatalogIssue(null);
       }).catch((error: unknown) => {
@@ -5986,9 +5998,14 @@ function BotChatSessions(props: Props) {
       });
     }
     refresh();
+    function refreshAfterCliSwitch(event: Event) {
+      if (isConversationCreatedEvent(event) && event.detail.botAlias === botAlias) refresh();
+    }
+    window.addEventListener(CONVERSATION_CREATED_EVENT, refreshAfterCliSwitch);
     window.addEventListener("focus", refresh);
     return () => {
       sequence++;
+      window.removeEventListener(CONVERSATION_CREATED_EVENT, refreshAfterCliSwitch);
       window.removeEventListener("focus", refresh);
     };
   }, [botAlias, client, isVisible, selectionKey, catalogAttempt]);
@@ -5998,7 +6015,9 @@ function BotChatSessions(props: Props) {
     return selectedId ? client.forChatSession!(botAlias, selectedId) : null;
   }, [botAlias, client, selectedId, supportsSessions]);
 
-  const createSession = useCallback((title: string) => client.createChatSession!(botAlias, title), [botAlias, client]);
+  const createSession = useCallback((title: string, cliType?: CliType) => (
+    cliType === undefined ? client.createChatSession!(botAlias, title) : client.createChatSession!(botAlias, title, cliType)
+  ), [botAlias, client]);
   const catalogNotice = catalogIssue && isVisible ? (
     <div role="status" className="flex shrink-0 flex-wrap items-center gap-x-2 border-b border-[var(--workbench-hairline)] px-3 py-1 text-xs text-[var(--text)]">
       {catalogIssue.defaultOnly ? null : <span>会话列表加载失败</span>}
@@ -6027,7 +6046,8 @@ function BotChatSessions(props: Props) {
       {...props}
       client={scopedClient}
       sessionId={sessionId}
-      sessionOptions={supportsSessions ? options : []}
+      sessionOptions={supportsSessions ? catalog.items : []}
+      cliOptions={catalog.cliOptions}
       catalogNotice={catalogNotice}
       draft={drafts.current.get(sessionId)}
       focusSessionSelector={selectionVersion.current > 0}
@@ -6036,7 +6056,8 @@ function BotChatSessions(props: Props) {
         selectionVersion.current++;
         wantedId.current = item.id;
         window.localStorage.setItem(selectionKey, item.id);
-        setOptions((items) => items.some((option) => option.id === item.id) ? items : [...items, item]);
+        setCatalog((current) => current.items.some((option) => option.id === item.id)
+          ? current : { ...current, items: [...current.items, item] });
         setSelectedId(item.id);
       }}
       onCreateSession={client.createChatSession ? createSession : undefined}

@@ -217,6 +217,11 @@ def _merge_session_snapshots(source: dict[str, Any] | None, target: dict[str, An
     merged = dict(preferred)
 
     for key, value in fallback.items():
+        if key in ("selected_cli_type", "selected_cli_path") and (
+            preferred.get("selected_cli_type") is not None or preferred.get("selected_cli_path") is not None
+        ):
+            # A command belongs to the tool choice in the same snapshot.
+            continue
         if key not in merged or merged.get(key) in (None, "", [], {}):
             merged[key] = value
 
@@ -327,6 +332,7 @@ def _matches_named_owner(payload: dict | None, alias: str) -> bool:
 
 def insert_web_session_snapshot(
     bot_id: int, user_id: int, session_id: str, working_dir: str, title: str, *, bot_alias: str,
+    selected_cli_type: str | None = None, selected_cli_path: str | None = None,
 ) -> bool:
     bot_alias = normalize_session_bot_alias(bot_alias)
     if not bot_alias:
@@ -342,6 +348,10 @@ def insert_web_session_snapshot(
         "local_history_backend": LOCAL_HISTORY_BACKEND,
         "session_epoch": 0,
     }
+    if selected_cli_type is not None:
+        payload["selected_cli_type"] = selected_cli_type
+    if selected_cli_path is not None:
+        payload["selected_cli_path"] = selected_cli_path
     with _store_lock:
         if _using_sqlite():
             return _get_sqlite_store().insert_session(key, bot_id, user_id, scope, payload)
@@ -388,7 +398,10 @@ def list_web_session_snapshots(bot_id: int, user_id: int, *, bot_alias: str) -> 
             continue
         session_id = key[len(prefix):]
         if is_web_session_id(session_id) and payload.get("web_session_id") == session_id:
-            result.append({"id": session_id, "title": str(payload.get("web_session_title") or "")})
+            item = {"id": session_id, "title": str(payload.get("web_session_title") or "")}
+            if payload.get("selected_cli_type") is not None:
+                item["selected_cli_type"] = payload["selected_cli_type"]
+            result.append(item)
     return result
 
 
@@ -491,6 +504,8 @@ def save_session(
     web_session_id: str = "",
     web_session_title: str = "",
     bot_alias: str = "",
+    selected_cli_type: str | None = None,
+    selected_cli_path: str | None = None,
 ):
     """保存会话信息到持久化存储（原子读-改-写）"""
     key = _make_key(bot_id, user_id, agent_id)
@@ -503,6 +518,10 @@ def save_session(
         if not bot_alias:
             raise ValueError("missing named Web session owner")
         session_data.update(bot_alias=bot_alias, web_session_id=web_session_id, web_session_title=web_session_title)
+        if selected_cli_type is not None:
+            session_data["selected_cli_type"] = selected_cli_type
+        if selected_cli_path is not None:
+            session_data["selected_cli_path"] = selected_cli_path
     if codex_session_id:
         session_data["codex_session_id"] = codex_session_id
     if claude_session_id:
