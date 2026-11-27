@@ -357,7 +357,33 @@ Desktop execution temporarily bridges the Desktop profile's `agent-default-model
 
 Application data defaults to `~/.tcb/orbit-safe-claw`; `TCB_DATA_DIR` overrides that directory. Plugins and chat history use their own directories under `~/.tcb`. After a storage migration, the locator at `~/.tcb/storage.json` determines the active roots, and a conflicting `TCB_DATA_DIR` prevents startup for source installations. Windows portable packages use a separate `.tcb` storage root inside the package, so a host user's migrated locator is not imported. Portable packages place application data under the package's `data/` directory; after a portable migration, the package locator determines the application data directory.
 
-The execution details list reads previews from the workspace database. Expanding a tool result reads the selected event in full. Older turns build their previews on the first request that needs them for a list or its counts. This compatibility version continues to write plaintext, so 3.2.0 can read and append to history created during the upgrade.
+The execution details list reads previews from the workspace database. Expanding a tool result reads the selected event in full. Older turns build their previews on the first request that needs them for a list or its counts. The default write format is 3.2.0 plaintext.
+
+<details>
+<summary>Pilot compression and restoration of large tool results</summary>
+
+Run these commands from the installation directory with the host's storage configuration. Use a project directory or a 64-character history key for `$workspace`. Point `--rollback-install` at the separately retained program that will actually serve as the rollback installation. Before enabling writes the command runs that program's reader against a temporary database with plaintext and v1 zlib events. Managed updates also check the actual pre-update reader hashes. The same check applies when skipping releases.
+
+```powershell
+$workspace = 'D:\Projects\example'
+python -m scripts.trace_body_compression status --workspace $workspace
+python -m scripts.trace_body_compression enable --workspace $workspace --rollback-install 'D:\Orbit\rollback'
+python -m scripts.trace_body_compression verify --workspace $workspace
+```
+
+The pilot covers live `tool_result` events appended to the selected workspace after activation, including later updates to those events. A summary and its original JSON must total at least **64 KiB in UTF-8** and save space including framing and SHA-256. Previews are stored separately. A changed writer or rollback-reader fingerprint returns subsequent writes to plaintext until re-enabled. Disabling stops new compression and leaves existing encoded bodies readable.
+
+The tested compatible reader (`0c412028`) can read mixed history and continue writing plaintext. Before reverting to original 3.2.0 (`395c3d850115`), use the pilot tools to disable and expand each affected workspace, then check the entire active history directory.
+
+```powershell
+python -m scripts.trace_body_compression disable --workspace $workspace
+python -m scripts.trace_body_compression restore --workspace $workspace --batch-size 8
+python -m scripts.trace_body_compression check-legacy
+```
+
+`restore` decodes, verifies, writes and reads back each batch in one SQLite transaction. Pass `--max-batches 1` to process one batch. Repeating the command resumes the remaining records. `check-legacy` includes archived Bots and unlisted workspaces. Exit code 0 confirms that every switch is off, all databases were checked and the compressed count is zero. You can then switch to original 3.2.0 with the history written during the upgrade intact.
+
+</details>
 
 <details>
 <summary>Archive chat history from temporary pytest workspaces</summary>

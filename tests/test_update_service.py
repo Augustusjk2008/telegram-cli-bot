@@ -78,6 +78,21 @@ def test_store_serializes_parallel_writers(service):
     assert state["revision"] == 41
 
 
+def test_replacing_completed_job_retains_rollback_reader_identity_privately(service):
+    from scripts.update_package import TRACE_READER_FILES
+
+    service._migrate_legacy()
+    hashes = {name: "a" * 64 for name in TRACE_READER_FILES}
+    service.store.mutate(lambda state: state.update(job={"phase": "succeeded", "job_id": "previous",
+                          "manifest": {"commit": "installed"}, "original_hashes": hashes}))
+    lease, status = service._reserve({"type": "upload"})
+    try:
+        assert service.store.read()["trace_rollback_origin"] == {"target_commit": "installed", "job_id": "previous", "files": hashes}
+        assert "trace_rollback_origin" not in status
+    finally:
+        lease.__exit__(None, None, None)
+
+
 def test_legacy_claim_requires_install_owned_path(service, tmp_path):
     owned = service.repo_root / ".updates" / "update.zip"
     owned.parent.mkdir()

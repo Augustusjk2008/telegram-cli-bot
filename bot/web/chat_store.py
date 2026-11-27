@@ -23,7 +23,7 @@ from bot.runtime_paths import (
     get_legacy_project_chat_db_path,
     normalize_workspace_dir,
 )
-from bot.web import trace_previews
+from bot.web import trace_body_policy, trace_previews
 from bot.web.diagnostics import diag_log_slow
 
 LOCAL_HISTORY_BACKEND = "local_v1"
@@ -1258,6 +1258,9 @@ class ChatStore:
         if not normalized_events:
             return False
         trace_previews.begin_write(conn)
+        pilot = any(event.get("kind") == "tool_result" for event in normalized_events) and trace_body_policy.enabled(
+            conn, self.workspace_key
+        )
         row = conn.execute(
             "SELECT COALESCE(MAX(ordinal), 0) + 1 AS next_ordinal FROM trace_events WHERE turn_id = ?",
             (turn_id,),
@@ -1275,9 +1278,9 @@ class ChatStore:
                     """, (turn_id, kind, call_id),
                 ).fetchone()
                 if existing is not None:
-                    trace_previews.write_event(conn, turn_id, next_ordinal, existing["id"], event, now, update=True)
+                    trace_previews.write_event(conn, turn_id, next_ordinal, existing["id"], event, now, update=True, pilot=pilot)
                     continue
-            trace_previews.write_event(conn, turn_id, next_ordinal, f"trace_{uuid.uuid4().hex}", event, now)
+            trace_previews.write_event(conn, turn_id, next_ordinal, f"trace_{uuid.uuid4().hex}", event, now, pilot=pilot)
             next_ordinal += 1
         conn.execute("UPDATE turns SET updated_at = ? WHERE id = ?", (now, turn_id))
         return True

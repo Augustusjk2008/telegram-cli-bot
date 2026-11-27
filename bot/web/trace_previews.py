@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import sqlite3
 import struct
 import zlib
+from contextlib import closing
+from functools import lru_cache
 from typing import Any, NamedTuple
 
 from bot.web.trace_compaction import compact_trace_event, estimate_json_chars
@@ -37,11 +40,70 @@ END;
 COMMIT;
 """
 
-# The compatibility release reads tagged BLOBs and writes ordinary 3.2.0 TEXT.
+MIN_BODY_BYTES = 64 * 1024
+logger = logging.getLogger(__name__)
+
 # The v1 checksum covers the version, byte boundaries and both UTF-8 strings.
 BODY_MAGIC = b"\x00OTR"
 BODY_LENGTHS = struct.Struct(">BQq")  # version, summary bytes, payload bytes (-1 = NULL)
 BODY_COLUMNS = "id, ordinal, kind, raw_type, title, tool_name, call_id, summary, payload_json, created_at"
+
+
+def _rle_deflate(data) -> bytes:
+    compressor = zlib.compressobj(level=1, strategy=zlib.Z_RLE)
+    return compressor.compress(data) + compressor.flush()
+
+
+def _compress_body(body: bytes) -> bytes:
+    # Large encoded tool output can spend most of the write searching for distant matches.
+    # Compare one DEFLATE window before choosing a strategy for the full body.
+    if len(body) >= 1024 * 1024:
+        middle = len(body) // 2
+        sample = memoryview(body)[middle:middle + 32768]
+        if len(_rle_deflate(sample)) <= len(zlib.compress(sample, level=3)):
+            return _rle_deflate(body)
+    return zlib.compress(body, level=3)
+
+
+@lru_cache(maxsize=1)
+def _compiled_length_limit() -> int:
+    # Python 3.10 exposes the compile option but not Connection.getlimit().
+    with closing(sqlite3.connect(":memory:")) as conn:
+        for (option,) in conn.execute("PRAGMA compile_options"):
+            if option.startswith("MAX_LENGTH="):
+                return int(option.partition("=")[2])
+    return 1_000_000_000
+
+
+def _plaintext_fits(conn: sqlite3.Connection, fields: tuple) -> bool:
+    # A compressed insert must also be restorable as an ordinary SQLite record.
+    limit = conn.getlimit(sqlite3.SQLITE_LIMIT_LENGTH) if hasattr(conn, "getlimit") else _compiled_length_limit()
+    overhead = 128  # Record header, serial-type varints and the integer ordinal.
+    if 4 * sum(len(field) for field in fields) + overhead <= limit:
+        return True
+    encoding = conn.execute("PRAGMA encoding").fetchone()[0]
+    return sum(len(field.encode(encoding)) for field in fields) + overhead <= limit
+
+
+def encode_body(event_id: str, summary: str, payload_json: str | None) -> tuple[str, str | bytes | None]:
+    if (len(summary) + len(payload_json or "")) * 4 < MIN_BODY_BYTES:
+        return summary, payload_json
+    try:
+        summary_bytes = summary.encode("utf-8")
+        payload_bytes = (payload_json or "").encode("utf-8")
+        size = len(summary_bytes) + len(payload_bytes)
+        if size >= MIN_BODY_BYTES:
+            lengths = BODY_LENGTHS.pack(1, len(summary_bytes), -1 if payload_json is None else len(payload_bytes))
+            body = summary_bytes + payload_bytes
+            compressed = _compress_body(body)
+            if len(BODY_MAGIC) + len(lengths) + 32 + len(compressed) < size:
+                digest = hashlib.sha256(lengths)
+                digest.update(body)
+                return "", BODY_MAGIC + lengths + digest.digest() + compressed
+    except Exception:
+        # Projection and the ordinary plaintext write still use the original values.
+        logger.warning("Writing trace %s as plaintext after compression failed", event_id)
+    return summary, payload_json
 
 
 def decode_body(event_id: str, summary: str, payload_json: str | bytes | None) -> tuple[str, str | bytes | None]:
@@ -147,20 +209,30 @@ def save(conn: sqlite3.Connection, event: dict, *, payload_json: str | None = No
 
 
 def write_event(conn: sqlite3.Connection, turn_id: str, ordinal: int, event_id: str, item: dict,
-                created_at: str, *, update: bool = False) -> None:
+                created_at: str, *, update: bool = False, pilot: bool = False) -> None:
     kind = str(item.get("kind") or "unknown")
     call_id = str(item.get("call_id") or "")
     raw_type, title, tool_name, summary = (str(item.get(k) or "") for k in ("raw_type", "title", "tool_name", "summary"))
     payload = item.get("payload")
     payload_json = json.dumps(payload, ensure_ascii=False) if payload is not None else None
+    enrolled = pilot and kind == "tool_result"
+    if enrolled and update:
+        member = conn.execute("SELECT 1 FROM trace_body_pilot_events WHERE event_id=?", (event_id,)).fetchone()
+        enrolled = member is not None
+    stored_summary, stored_payload = summary, payload_json
+    if enrolled and _plaintext_fits(conn, (event_id, turn_id, kind, raw_type, title, tool_name, call_id,
+                                           summary, payload_json or "", created_at)):
+        stored_summary, stored_payload = encode_body(event_id, summary, payload_json)
     if update:
         conn.execute("""UPDATE trace_events SET raw_type=?, title=?, tool_name=?, summary=?, payload_json=?, created_at=?
-                        WHERE id=?""", (raw_type, title, tool_name, summary, payload_json, created_at, event_id))
+                        WHERE id=?""", (raw_type, title, tool_name, stored_summary, stored_payload, created_at, event_id))
     else:
         conn.execute("""INSERT INTO trace_events
                      (id,turn_id,ordinal,kind,raw_type,title,tool_name,call_id,summary,payload_json,created_at)
                      VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-                     (event_id, turn_id, ordinal, kind, raw_type, title, tool_name, call_id, summary, payload_json, created_at))
+                     (event_id, turn_id, ordinal, kind, raw_type, title, tool_name, call_id, stored_summary, stored_payload, created_at))
+        if enrolled:
+            conn.execute("INSERT INTO trace_body_pilot_events(event_id) VALUES (?)", (event_id,))
     save(conn, {"id": event_id, "kind": kind, "raw_type": raw_type, "title": title, "tool_name": tool_name,
                 "call_id": call_id, "summary": summary, "payload": json.loads(payload_json) if payload_json else None},
          payload_json=payload_json)
