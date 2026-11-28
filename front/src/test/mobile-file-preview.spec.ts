@@ -414,12 +414,18 @@ for (const legacy of [false, true]) {
     const fixtureScript = fileURLToPath(new URL("../../scripts/html-preview-browser-fixture.py", import.meta.url));
     const fixture = JSON.parse(execFileSync(backendPython(),
       [fixtureScript, url.origin, url.pathname.replace(/\/$/, "")], { encoding: "utf8" })) as {
-      session: { session_id: string };
+      session: { session_id: string; entry_path: string };
       resources: Record<string, { status: number; headers: Record<string, string>; body: string }>;
+      refreshed: { status: number; headers: Record<string, string>; body: string };
     };
     await page.route("**/files/html-preview*", route => route.fulfill({ json: { ok: true, data: fixture.session } }));
+    let refreshed = false;
     await page.route("**/api/file-previews/**", route => {
-      const resource = fixture.resources[new URL(route.request().url()).pathname.split(fixture.session.session_id + "/")[1]];
+      const requestUrl = new URL(route.request().url());
+      const path = decodeURIComponent(requestUrl.pathname.split(fixture.session.session_id + "/")[1]);
+      const resource = refreshed && path.endsWith("/pages/details.html") ? fixture.refreshed
+        : fixture.resources[path + requestUrl.search] ?? fixture.resources[path];
+      if (!resource) return route.fulfill({ status: 404, body: "" });
       return route.fulfill({ status: resource.status, headers: resource.headers, body: Buffer.from(resource.body, "base64") });
     });
     await tab(page, "文件").tap();
@@ -439,8 +445,27 @@ for (const legacy of [false, true]) {
     };
 
     await openHtml();
+    if (!legacy) {
+      await expect(frame.locator("h1")).toHaveCSS("color", "rgb(18, 52, 86)");
+      await expect(frame.locator("#signed")).toHaveCSS("padding-left", "13px");
+      await expect(frame.locator("#signed")).toHaveCSS("background-image", /\/file-previews\/.+\/dist\/assets\/pixel\.svg/);
+      await expect(frame.locator("#module")).toHaveText("module ready");
+      await expect(frame.locator("#json")).toHaveText("JSON ready");
+      await expect(frame.locator("#font")).toHaveText("font ready");
+      for (const alt of ["Preview image", "Bundle logo"]) {
+        await expect(frame.getByAltText(alt)).toHaveJSProperty("naturalWidth", 24);
+      }
+      for (const id of ["parent", "storage", "api"]) await expect(frame.locator("#" + id)).toHaveText("blocked");
+      await expect(preview.getByRole("button", { name: "刷新", exact: true })).toBeEnabled();
+      await frame.getByRole("link", { name: "Contact" }).tap();
+      await expect(preview.getByTitle(/contact\/\?via=preview#address$/)).toBeVisible();
+      await expect(frame.getByAltText("Map")).toHaveJSProperty("naturalWidth", 10);
+      await preview.getByRole("button", { name: "返回入口" }).tap();
+      await expect(frame.getByRole("heading", { name: "Interactive HTML" })).toBeVisible();
+    }
+    const hashTitle = "当前页面：" + encodeURI(fixture.session.entry_path) + "#route";
     await frame.getByRole("link", { name: "Hash route" }).tap();
-    await expect(preview.getByTitle("当前页面：index.html#route")).toBeVisible();
+    await expect(preview.getByTitle(hashTitle)).toBeVisible();
     await back();
     await expectOrigin();
 
@@ -452,9 +477,14 @@ for (const legacy of [false, true]) {
 
     await openHtml();
     await frame.getByRole("link", { name: "Hash route" }).tap();
-    await expect(preview.getByTitle("当前页面：index.html#route")).toBeVisible();
+    await expect(preview.getByTitle(hashTitle)).toBeVisible();
     await frame.getByRole("link", { name: "Details" }).tap();
     await expect(frame.getByRole("heading", { name: "Details version 1" })).toBeVisible();
+    if (!legacy) {
+      refreshed = true;
+      await preview.getByRole("button", { name: "刷新", exact: true }).tap();
+      await expect(frame.getByRole("heading", { name: "Details version 2" })).toBeVisible();
+    }
     await preview.getByRole("button", { name: "返回", exact: true }).tap();
     await fileRow(page, csv).tap();
     await expect(preview.getByRole("table")).toBeVisible();

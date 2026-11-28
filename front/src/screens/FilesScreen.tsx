@@ -249,9 +249,9 @@ function TransferProgressPanel({
     <SurfacePanel
       role="status"
       aria-label={`${verb}进度`}
-      className="mb-4 px-4 py-3 text-sm"
+      className="px-2.5 py-2 text-sm"
     >
-      <div className="mb-2 flex items-center justify-between gap-3">
+      <div className="mb-1.5 flex items-center justify-between gap-2">
         <span className="min-w-0 truncate font-medium">正在{verb} {filename}</span>
         <div className="flex shrink-0 items-center gap-3">
           <span className="font-mono text-xs text-[var(--muted)]">
@@ -1144,20 +1144,20 @@ export function FilesScreen({
 
   return (
     <main data-ui-density="compact" className="flex h-full flex-col bg-[var(--workbench-titlebar-bg)]">
-      <header className="flex items-center justify-between border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-4 py-3">
-        <div className="flex items-center gap-2 overflow-hidden">
+      <header className="flex items-center justify-between gap-1 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-1.5">
+        <div className="flex min-w-0 items-center gap-1 overflow-hidden">
           {currentPath !== "/" && currentPath !== "." && currentPath !== remoteWorkspace?.root && (!remoteWorkspace || parentRemotePath(currentPath, remoteWorkspace.platform) !== currentPath) && !isVirtualRoot && !isEditorOpen ? (
             <ToolbarButton type="button" size="icon" variant="ghost" onClick={() => void handleBack()} aria-label="返回上级目录">
               <ChevronLeft className="w-5 h-5" />
             </ToolbarButton>
           ) : null}
           <div className="min-w-0">
-            <h1 className="text-lg font-semibold truncate">{botAlias}</h1>
+            <h1 className="truncate text-base leading-5 font-semibold">{botAlias}</h1>
             <p className="truncate text-xs text-[var(--muted)]">{currentPath || "加载中..."}</p>
           </div>
         </div>
         {!isEditorOpen ? (
-          <div className="flex items-center gap-1">
+          <div className="flex shrink-0 items-center gap-1">
             <ToolbarButton
               type="button"
               aria-label="Home"
@@ -1236,7 +1236,7 @@ export function FilesScreen({
 
       {canBrowseExternalPaths && !structureOnly && !isEditorOpen ? (
         <form
-          className="flex items-center gap-2 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-4 py-2"
+          className="flex items-center gap-1.5 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-1"
           onSubmit={(event) => {
             event.preventDefault();
             void handleNavigateExternalPath();
@@ -1278,19 +1278,19 @@ export function FilesScreen({
           onClose={handleCloseEditor}
         />
       ) : (
-        <section className="flex-1 overflow-y-auto p-3">
+        <section className="flex-1 space-y-2 overflow-y-auto p-1.5">
           {error ? (
-            <SurfacePanel className="mb-4 border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] px-4 py-3 text-sm text-[var(--feedback-error-text-deep)] shadow-none">
+            <SurfacePanel className="border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] px-2.5 py-2 text-sm text-[var(--feedback-error-text-deep)] shadow-none">
               {error}
             </SurfacePanel>
           ) : null}
           {compressingName ? (
-            <div role="status" className="mb-4 text-sm text-[var(--muted)]">
+            <div role="status" className="text-sm text-[var(--muted)]">
               正在压缩 {compressingName}…
             </div>
           ) : null}
           {statusText ? (
-            <SurfacePanel role="status" className="mb-4 border-[var(--feedback-success-border-light)] bg-[var(--feedback-success-background-subtle)] px-4 py-3 text-sm text-[var(--feedback-success-text-deep)] shadow-none">
+            <SurfacePanel role="status" className="border-[var(--feedback-success-border-light)] bg-[var(--feedback-success-background-subtle)] px-2.5 py-2 text-sm text-[var(--feedback-success-text-deep)] shadow-none">
               {statusText}
             </SurfacePanel>
           ) : null}
@@ -1316,7 +1316,7 @@ export function FilesScreen({
             />
           ) : null}
           {loading ? (
-            <div className="text-center text-[var(--muted)] mt-10">加载中...</div>
+            <div className="py-4 text-center text-[var(--muted)]">加载中...</div>
           ) : (
             <FileList
               files={files}

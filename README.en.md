@@ -239,7 +239,9 @@ Local files use the installed viewer when your account can run plugins. If sever
 
 ### Local HTML Preview
 
-The desktop workbench, chat file links, and mobile preview support interactive local HTML, including JavaScript, ES Modules, styles, images, fonts, relative JSON requests, project links, and hash routes. Use relative resource URLs; Vite builds need `base: "./"`. Each preview remains bound to its original resource directory. Remote SSH workspaces use a static HTML preview.
+Open an HTML file from the desktop workbench, a chat link, or the mobile file browser. The selected page opens directly, including a nested page in a static site or an existing Vite build. Document-relative links work alongside site-root URLs such as `/assets/site.css` in HTML, CSS, module imports, and local JavaScript requests. A link to `/contact/` opens that directory’s index page. Images, fonts, JSON requests and hash routes work inside the preview.
+
+Orbit infers the site root from the opened file’s ancestors, using the page’s own asset paths, index files and build directories such as `dist/` as clues. It keeps that root for the life of the preview. The frame’s browser URL includes the preview ticket, which matters for routers that read `location.pathname`. Server-rendered pages and unbuilt framework source require their own runtime. SSH workspaces use a static HTML view.
 
 HTML files are limited to 1 MiB and individual resources to 16 MiB. The preview sandbox isolates the page from the console DOM, login credentials, and management APIs. Hidden directories, sensitive configuration, directory listings, server-side form submissions, external sites, development-server proxies, hot reload, persistent storage, and Service Workers are unavailable.
 

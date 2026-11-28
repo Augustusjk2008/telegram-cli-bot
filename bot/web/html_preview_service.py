@@ -11,16 +11,18 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlsplit
 
 from bot.web.api_common import WebApiError
 from bot.web.files_service import resolve_safe_path
+from bot.web.html_preview_urls import ORIGINAL_CSS_PARAM, PreviewDocument, rewrite_css
 from bot.web.text_encoding import UnsupportedTextEncoding, decode_text_bytes
 
 
 HTML_LIMIT = 1024 * 1024
 RESOURCE_LIMIT = 16 * 1024 * 1024
 HTML_EXTENSIONS = {".html", ".htm", ".xhtml"}
+INDEX_FILES = ("index.html", "index.htm", "index.xhtml")
 MIME_TYPES = {
     ".html": "text/html", ".htm": "text/html", ".xhtml": "application/xhtml+xml",
     ".css": "text/css", ".js": "text/javascript", ".mjs": "text/javascript",
@@ -37,13 +39,13 @@ _SENSITIVE = re.compile(
 _DEVICE = re.compile(r"^(?:con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(?:\.|$)", re.I)
 
 
-def validate_relative_path(value: str) -> str:
+def validate_relative_path(value: str, *, allow_hidden: bool = False) -> str:
     # aiohttp already decodes route parameters once. Reject residual escapes,
     # Windows aliases/ADS and ambiguous separators instead of decoding again.
     if not value or any(c in value for c in "\\:%?#") or any(ord(c) < 32 for c in value):
         raise WebApiError(400, "unsafe_preview_path", "预览资源路径不安全")
     for part in value.split("/"):
-        if (not part or part.endswith((".", " "))
+        if (not part or (not allow_hidden and part.startswith(".")) or part.endswith((".", " "))
                 or _DEVICE.match(part) or _SENSITIVE.search(part)):
             raise WebApiError(403, "preview_path_forbidden", "预览不允许访问此路径")
     return value
@@ -82,7 +84,7 @@ def _opened_path(handle, target: str) -> str:
     return os.path.realpath(fd_path if os.path.exists(fd_path) else target)
 
 
-def read_resource(root: str, relative: str) -> tuple[bytes, str]:
+def read_resource(root: str, relative: str, *, original_css: bool = False) -> tuple[bytes, str]:
     target = resource_path(root, relative)
     suffix = Path(target).suffix.lower()
     limit = HTML_LIMIT if suffix in HTML_EXTENSIONS else RESOURCE_LIMIT
@@ -105,12 +107,74 @@ def read_resource(root: str, relative: str) -> tuple[bytes, str]:
     except (OSError, ValueError) as exc:
         raise WebApiError(404, "preview_file_not_found", "预览资源不存在或不可读取") from exc
     mime = MIME_TYPES[suffix]
-    if suffix in {".css", ".js", ".mjs", ".json"}:
+    if suffix in {".js", ".mjs", ".json"} or (suffix == ".css" and not original_css):
         try:
             data = decode_text_bytes(data).text.encode("utf-8")
         except UnsupportedTextEncoding as exc:
             raise WebApiError(415, "preview_encoding", "资源文本编码不受支持") from exc
     return data, mime
+
+
+def _requested_file(root: str, path: str) -> str:
+    directory = path.removesuffix("/")
+    if path:
+        validate_relative_path(directory)
+        if not os.path.isdir(resolve_safe_path(root, directory)):
+            if path.endswith("/") or not Path(path).suffix:
+                raise WebApiError(404, "preview_file_not_found", "预览资源不存在")
+            return path
+    for index in INDEX_FILES:
+        relative = f"{directory}/{index}" if directory else index
+        if os.path.isfile(resource_path(root, relative)):
+            return relative
+    raise WebApiError(404, "preview_file_not_found", "预览目录没有首页")
+
+
+class _RootReferences(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.paths: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        for name, value in attrs:
+            if (len(self.paths) >= 8 or name not in {"src", "href", "poster"} or not value
+                    or not value.startswith("/") or value.startswith(("//", "/\\"))):
+                continue
+            path = unquote(urlsplit(value).path[1:])
+            if path and path not in self.paths:
+                self.paths.append(path)
+
+
+def find_site_directory(root: str, entry: str) -> str:
+    data, _ = read_resource(root, entry)
+    # Plain HTML exports often have an index at both the site root and each
+    # page. Use the opening page's own URLs to disambiguate those ancestors.
+    hints = _RootReferences()
+    try:
+        hints.feed(decode_text_bytes(data).text[:65536])
+    except UnsupportedTextEncoding:
+        pass  # The document renderer reports unsupported encodings.
+    boundary = Path(root)
+    directory = (boundary / entry).parent
+    best = directory
+    best_rank = (-1, False, False)
+    while True:
+        indexed = any((directory / name).is_file() for name in INDEX_FILES)
+        output = indexed and directory.name.lower() in {"dist", "build", "out", "public", "_site"}
+        matches = 0
+        for path in hints.paths:
+            try:
+                relative = _requested_file(str(directory), path)
+                matches += os.path.isfile(resource_path(str(directory), relative))
+            except WebApiError:
+                continue
+        rank = (matches, output, indexed)
+        if rank > best_rank:
+            best, best_rank = directory, rank
+        if directory == boundary or output or (directory / "package.json").is_file():
+            break
+        directory = directory.parent
+    return "" if best == boundary else best.relative_to(boundary).as_posix()
 
 
 @dataclass(frozen=True)
@@ -123,6 +187,7 @@ class PreviewSession:
     root: str
     root_identity: tuple[str, int, int]
     entry_path: str
+    site_directory: str
     deadline: float
     expires_at: str
 
@@ -149,14 +214,14 @@ class HtmlPreviewStore:
                 del self._sessions[key]
 
     def create(self, *, owner: tuple[str, int], alias: str, agent_id: str,
-               identity: tuple, root: str, entry_path: str) -> PreviewSession:
+               identity: tuple, root: str, entry_path: str, site_directory: str = "") -> PreviewSession:
         self._prune()
         root = os.path.realpath(root)
         if (len(self._sessions) >= self.max_sessions
                 or sum(item.owner == owner for item in self._sessions.values()) >= self.per_user):
             raise WebApiError(429, "preview_capacity", "预览会话过多，请关闭其他预览后重试")
         session = PreviewSession(
-            secrets.token_urlsafe(32), owner, alias, agent_id, identity, root, directory_identity(root), entry_path,
+            secrets.token_urlsafe(32), owner, alias, agent_id, identity, root, directory_identity(root), entry_path, site_directory,
             time.monotonic() + self.ttl,
             datetime.fromtimestamp(time.time() + self.ttl, timezone.utc).isoformat().replace("+00:00", "Z"),
         )
@@ -190,36 +255,11 @@ def entry_url(session: PreviewSession, base_path: str) -> str:
     return resource_prefix(base_path, session.session_id) + quote(session.entry_path, safe="/")
 
 
-class _HeadInsertion(HTMLParser):
-    def __init__(self, source: str):
-        super().__init__(convert_charrefs=False)
-        self.source = source
-        self.line_offsets = [0, *(match.end() for match in re.finditer("\n", source))]
-        self.head: int | None = None
-        self.empty_head: tuple[int, str] | None = None
-        self.fallback = 0
+_BRIDGE = Path(__file__).with_name("html_preview_bridge.js").read_text(encoding="utf-8")
 
-    def _offset(self) -> int:
-        line, column = self.getpos()
-        return self.line_offsets[line - 1] + column
 
-    def handle_starttag(self, tag: str, attrs) -> None:
-        if tag == "head" and self.head is None:
-            self.head = self._offset() + len(self.get_starttag_text())
-        elif tag == "html":
-            self.fallback = self._offset() + len(self.get_starttag_text())
-
-    def handle_decl(self, decl: str) -> None:
-        if decl.lower().startswith("doctype"):
-            self.fallback = self._offset() + len(decl) + 3
-
-    def handle_startendtag(self, tag: str, attrs) -> None:
-        if tag == "head" and self.head is None:
-            self.empty_head = (self._offset(), self.get_starttag_text())
-
-    def handle_pi(self, data: str) -> None:
-        if data.startswith("xml "):
-            self.fallback = self._offset() + len(data) + 3
+def site_prefix(session: PreviewSession, prefix: str) -> str:
+    return prefix + (quote(session.site_directory, safe="/") + "/" if session.site_directory else "")
 
 
 def inject_bridge(data: bytes, session: PreviewSession, prefix: str, *, xhtml: bool = False) -> bytes:
@@ -229,71 +269,24 @@ def inject_bridge(data: bytes, session: PreviewSession, prefix: str, *, xhtml: b
         raise WebApiError(415, "preview_encoding", "HTML 文本编码不受支持") from exc
     if xhtml:
         source = re.sub(r'(<\?xml\b[^>]*\bencoding\s*=\s*)["\'][^"\']+["\']', r'\1"utf-8"', source, count=1)
-    script = r"""(() => {
-const sessionId = SESSION_ID, prefix = RESOURCE_PREFIX;
-const path = () => location.pathname.slice(prefix.length) + location.search + location.hash;
-let failure = "";
-let historyLength = history.length;
-const visited = new Set([location.href]);
-let followingLink = "";
-const send = (event, message) => {
-  if (event === "error") failure = message;
-  parent.postMessage({type: "orbit-html-preview", sessionId, event: failure && event !== "traverse" ? "error" : event, path: path(), ...(failure ? {message: failure} : {})}, "*");
-};
-addEventListener("message", event => {
-  const data = event.data;
-  if (event.source === parent && data && data.type === "orbit-html-preview" && data.sessionId === sessionId && data.command === "refresh") location.reload();
-});
-addEventListener("hashchange", () => send("path"));
-addEventListener("click", event => {
-  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
-  const link = event.target?.closest?.("a[href]");
-  if (!(link instanceof HTMLAnchorElement) || link.hasAttribute("download")) return;
-  const target = link.getAttribute("target") ?? document.querySelector("base[target]")?.target;
-  if ((target && target.toLowerCase() !== "_self") || link.origin !== location.origin || !link.pathname.startsWith(prefix)) return;
-  followingLink = link.href;
-  // Older parent browsers cannot target a top-level history entry by key. Keep ordinary
-  // same-frame ticket links usable without adding child-only entries to their Back stack.
-  if (window.name === "orbit-preview-replace-" + sessionId) {
-    event.preventDefault();
-    location.replace(link.href);
-  }
-});
-// A new fragment also emits popstate. Back returns to a previously seen URL
-// without extending the joint session history. The parent validates the ticket.
-addEventListener("popstate", () => {
-  const traversal = followingLink !== location.href && history.length === historyLength && visited.has(location.href);
-  followingLink = "";
-  visited.add(location.href);
-  historyLength = history.length;
-  send("path");
-  if (traversal) send("traverse");
-});
-addEventListener("pageshow", event => {
-  if (event.persisted || performance.getEntriesByType("navigation")[0]?.type === "back_forward") send("traverse");
-});
-for (const name of ["pushState", "replaceState"]) {
-  const original = history[name];
-  history[name] = function(...args) {
-    const result = original.apply(this, args);
-    visited.add(location.href);
-    historyLength = history.length;
-    send("path");
-    return result;
-  };
-}
-addEventListener("error", event => send("error", event.message || "资源加载失败"), true);
-addEventListener("unhandledrejection", event => send("error", String(event.reason || "页面脚本失败")));
-addEventListener("DOMContentLoaded", () => send("ready"), {once: true});
-})();""".replace("SESSION_ID", json.dumps(session.session_id)).replace("RESOURCE_PREFIX", json.dumps(prefix))
-    script = "<script>" + ("<![CDATA[" + script + "]]>" if xhtml else script) + "</script>"
-    parser = _HeadInsertion(source)
-    parser.feed(source)
-    if parser.empty_head is not None and parser.head is None:
-        offset, tag = parser.empty_head
-        return (source[:offset] + tag[:-2] + ">" + script + "</head>" + source[offset + len(tag):]).encode("utf-8")
-    offset = parser.head if parser.head is not None else parser.fallback
-    return (source[:offset] + script + source[offset:]).encode("utf-8")
+    site = site_prefix(session, prefix)
+    options = json.dumps([session.session_id, prefix, site, ORIGINAL_CSS_PARAM]).replace("<", "\\u003c")
+    script = _BRIDGE.replace("PREVIEW_OPTIONS", options, 1)
+    bridge = "<script>" + ("<![CDATA[" + script + "]]>" if xhtml else script) + "</script>"
+    return PreviewDocument(source, site, prefix).render(bridge)
+
+
+def preview_resource(session: PreviewSession, path: str, prefix: str, *, original_css: bool = False) -> tuple[bytes, str, bool]:
+    """Return a rendered resource and whether its directory URL needs a trailing slash."""
+    relative = _requested_file(session.root, path)
+    if relative != path and path and not path.endswith("/"):
+        return b"", MIME_TYPES[Path(relative).suffix], True
+    data, mime = read_resource(session.root, relative, original_css=original_css)
+    if mime in {"text/html", "application/xhtml+xml"}:
+        data = inject_bridge(data, session, prefix, xhtml=mime == "application/xhtml+xml")
+    elif mime == "text/css" and not original_css:
+        data = rewrite_css(data.decode("utf-8"), site_prefix(session, prefix)).encode("utf-8")
+    return data, mime, False
 
 
 def security_headers(host: str, prefix: str) -> dict[str, str]:
@@ -306,7 +299,7 @@ def security_headers(host: str, prefix: str) -> dict[str, str]:
             "default-src 'none'", "sandbox allow-scripts allow-forms allow-downloads",
             f"script-src {source} 'unsafe-inline'", f"style-src {source} 'unsafe-inline'",
             f"img-src {source} data:", f"font-src {source}", f"connect-src {source}",
-            "form-action 'none'", "object-src 'none'", "frame-src 'none'", "worker-src 'none'", "base-uri 'none'",
+            "form-action 'none'", "object-src 'none'", "frame-src 'none'", "worker-src 'none'", f"base-uri {source}",
         ]),
         "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
         "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*",

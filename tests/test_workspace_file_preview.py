@@ -2,7 +2,7 @@ import json
 import os
 from pathlib import Path
 from unittest.mock import AsyncMock
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urljoin
 
 import pytest
 from aiohttp import web
@@ -13,9 +13,10 @@ from bot.models import BotProfile
 from bot.web.api_common import AuthContext, WebApiError, get_session_for_alias
 from bot.web.auth_store import CAP_ADMIN_OPS, CAP_READ_FILE_CONTENT, CAP_WRITE_FILES
 from bot.web.files_service import get_directory_listing
-from bot.web.html_preview_service import HtmlPreviewStore
+from bot.web.html_preview_service import HtmlPreviewStore, preview_resource
+from bot.web.html_preview_urls import ORIGINAL_CSS_PARAM, PreviewDocument
 from bot.web.routes import files_routes, html_preview_routes
-from bot.web.server import WebApiServer
+from bot.web.server import WebApiServer, cors_middleware, error_middleware
 
 
 @pytest.fixture
@@ -170,3 +171,121 @@ async def test_expected_directory_cannot_redirect_operations_to_a_same_named_fil
         await request(endpoint, original.name, anchored=False, expected_directory=external, content="wrong file")
     assert (changed.value.status, changed.value.code) == (409, "browse_directory_changed")
     assert (root / original.name).read_text(encoding="utf-8") == "workspace file"
+
+
+@pytest.mark.asyncio
+async def test_site_preview_uses_the_opened_page_and_serves_directory_indexes_under_public_mount(preview_routes, monkeypatch):
+    _, server, _, root = preview_routes
+    mount = "/gateway/node/preview"
+    monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "/node/preview")
+    monkeypatch.setattr("bot.web.server.WEB_PUBLIC_URL", "https://example.org" + mount)
+    monkeypatch.setattr("bot.web.server.WEB_FIXED_PUBLIC_FORWARD_ENABLED", False)
+    site = root / "site one"
+    (site / "docs").mkdir(parents=True)
+    (site / "contact").mkdir()
+    (site / "index.html").write_text("Home")
+    (site / "docs/index.html").write_text(
+        '<link href="/site.css"><a href="/contact">Contact</a>'
+        '<link rel="stylesheet" integrity="sha384-example" href="theme.css?v=2#sheet">'
+    )
+    signed_css = b'\xef\xbb\xbf.logo {background:url(/logo.svg)}\r\n'
+    (site / "docs/theme.css").write_bytes(signed_css)
+    (site / "docs/site.css").write_text(".page { color: red }")
+    (site / "site.css").write_text(".page { color: blue }")
+    (site / "contact/index.htm").write_text('<img src="./map.svg">')
+    (root / "shared.json").write_text("[]")
+    routes = web.Application()
+    html_preview_routes.register(routes, server)
+    app = web.Application()
+    app.add_subapp(mount, routes)
+
+    async def dispatch(method, url, body=None):
+        headers = {"Host": "example.org"} if body else {"Host": "example.org", "Origin": "null"}
+        req = make_mocked_request(method, url, headers=headers, app=app)
+        req._match_info = await app.router.resolve(req)
+        if body:
+            req.json = AsyncMock(return_value=body)
+        return await cors_middleware(req, lambda request: error_middleware(request, req.match_info.handler))
+
+    response = await dispatch("POST", mount + "/api/bots/main/files/html-preview?base=workspace",
+                              {"filename": "site one/docs/index.html"})
+    data = json.loads(response.text)["data"]
+    prefix = mount + "/api/file-previews/" + data["session_id"] + "/"
+    home = prefix + "site%20one/"
+    assert data["entry_url"] == home + "docs/index.html"
+    doc = await dispatch("GET", data["entry_url"])
+    assert doc.status == 200
+    assert f'href="{home}site.css"' in doc.text
+    assert f'href="theme.css?v=2&amp;{ORIGINAL_CSS_PARAM}=1#sheet"' in doc.text
+    original = await dispatch("GET", home + "docs/theme.css?v=2&" + ORIGINAL_CSS_PARAM + "=1")
+    assert original.body == signed_css and original.headers["Content-Type"] == "text/css"
+    assert (await dispatch("GET", home + "site.css")).text == ".page { color: blue }"
+    # A relative link to an existing workspace resource retains its original meaning.
+    assert (await dispatch("GET", urljoin(data["entry_url"], "../../shared.json"))).text == "[]"
+    redirect = await dispatch("GET", home + "contact?via=docs%26chat")
+    assert redirect.status == 302
+    assert redirect.headers["Location"] == home + "contact/?via=docs%26chat"
+    page = await dispatch("GET", redirect.headers["Location"])
+    assert page.status == 200 and '<img src="./map.svg">' in page.text
+    head = await dispatch("HEAD", redirect.headers["Location"])
+    assert head.body == b"" and head.headers["Content-Length"] == str(len(page.body))
+    assert page.headers["Access-Control-Allow-Origin"] == "*"
+    assert "Access-Control-Allow-Credentials" not in page.headers
+    assert "allow-same-origin" not in page.headers["Content-Security-Policy"]
+    assert (await dispatch("GET", home + "missing.js")).status == 404
+    assert (await dispatch("GET", home + "missing/")).status == 404
+    server.html_preview_store.invalidate(data["session_id"])
+    assert (await dispatch("GET", home + "contact/")).status == 410
+
+
+@pytest.mark.asyncio
+async def test_site_discovery_stops_at_the_build_and_directory_reads_enforce_the_grant(preview_routes):
+    request, server, _, root = preview_routes
+    site = root / "dist"
+    (site / "nested").mkdir(parents=True)
+    (site / "index.html").write_text("Site home")
+    (root / "only-at-workspace.css").write_text("old site")
+    (site / "nested/index.html").write_text('<link href="/only-at-workspace.css">')
+    response = await request("html-preview", "dist/nested/index.html")
+    ticket = server.html_preview_store.get(json.loads(response.text)["data"]["session_id"])
+    assert ticket.site_directory == "dist"
+    for name in (".private", "credentials", "empty"):
+        (site / name).mkdir()
+        if name != "empty":
+            (site / name / "index.html").write_text("private")
+    for path, expected in [("dist/.private/", 403), ("dist/credentials/", 403), ("dist/empty/", 404),
+                           ("dist/only-at-workspace.css", 404)]:
+        with pytest.raises(WebApiError) as error:
+            preview_resource(ticket, path, "/ticket/")
+        assert error.value.status == expected
+
+    outside = root.parent / "unrelated-site"
+    outside.mkdir()
+    (outside / "index.html").write_text("unrelated")
+    try:
+        (site / "linked").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("filesystem does not allow directory links")
+    with pytest.raises(WebApiError) as error:
+        preview_resource(ticket, "dist/linked/", "/ticket/")
+    assert error.value.status in (400, 403)
+
+
+def test_preview_relocates_url_tokens_without_changing_data_comments_or_displayed_source():
+    source = """<!doctype html><html><head style="background:url(/icon.svg)"/><body>
+<style>/* url(/comment) */ .a::after {content:"url(/label)"; background:url('/pic%27s.svg?v=1#x')}</style>
+<img title='example src="/literal"' src='&#47;photo.svg?a=1&amp;b=2'
+     srcset="data:image/png;base64,/9a 1x, /hi.png 2x">
+<a href="/%2e%2e/where/../contact/?v=2#team">Go</a>
+<a href="//other.example/about">External</a><a href="#local">Hash</a>
+<textarea><img src="/literal"></textarea><script>const text = 'href="/literal"'</script>
+</body></html>"""
+    html = PreviewDocument(source, "/ticket/site/", "/ticket/").render("<script>bridge()</script>").decode()
+    assert '<head style="background:url(/ticket/site/icon.svg)"><script' in html
+    assert '</script></head><body>' in html
+    assert '''/* url(/comment) */ .a::after {content:"url(/label)"; background:url('/ticket/site/pic%27s.svg?v=1#x')}''' in html
+    assert '''title='example src="/literal"' src="/ticket/site/photo.svg?a=1&amp;b=2"''' in html
+    assert 'srcset="data:image/png;base64,/9a 1x, /ticket/site/hi.png 2x"' in html
+    assert 'href="/ticket/site/contact/?v=2#team"' in html
+    assert 'href="//other.example/about"' in html and 'href="#local"' in html
+    assert '''<textarea><img src="/literal"></textarea><script>const text = 'href="/literal"'</script>''' in html

@@ -966,7 +966,11 @@ async def error_middleware(request: web.Request, handler):
 
 @web.middleware
 async def cors_middleware(request: web.Request, handler):
-    if html_preview_routes.is_resource_request(request.path, WebApiServer._web_base_path()):
+    base = WebApiServer._web_base_path()
+    if html_preview_routes.is_resource_request(request.path, base) or (
+        "/api/file-previews/" in request.path
+        and html_preview_routes.is_resource_request(request.path, _configured_public_web_base_path(base))
+    ):
         try:
             response = web.Response(status=204) if request.method == "OPTIONS" else await handler(request)
         except web.HTTPException as exc:

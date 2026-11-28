@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from pathlib import Path
+from urllib.parse import quote
 
 from aiohttp import web
 
@@ -10,9 +11,10 @@ from bot.web.api_common import WebApiError, get_chat_session_for_alias, get_prof
 from bot.web.auth_store import CAP_ADMIN_OPS, CAP_READ_FILE_CONTENT
 from bot.web.files_service import file_operation_directory, resolve_safe_path
 from bot.web.html_preview_service import (
-    HTML_EXTENSIONS, directory_identity, entry_url, inject_bridge, read_resource, resource_prefix,
+    HTML_EXTENSIONS, directory_identity, entry_url, find_site_directory, preview_resource, resource_prefix,
     security_headers, validate_relative_path,
 )
+from bot.web.html_preview_urls import ORIGINAL_CSS_PARAM
 
 
 def reject_remote(profile) -> None:
@@ -52,7 +54,9 @@ def _entry(root: str, browser_dir: str, filename: str, allow_external: bool) -> 
     if normalized.startswith("//"):
         raise WebApiError(400, "unsafe_preview_path", "不允许 UNC 路径")
     path_components = normalized[3:] if len(normalized) > 2 and normalized[1:3] == ":/" else normalized.lstrip("/")
-    validate_relative_path(path_components)
+    # A workspace itself can live under .tcb; check hidden paths relative to
+    # the granted root once the absolute entry has been resolved.
+    validate_relative_path(path_components, allow_hidden=os.path.isabs(filename))
     target = resolve_safe_path(browser_dir, filename, allow_external_paths=allow_external)
     try:
         inside = os.path.commonpath([root, target]) == root
@@ -73,7 +77,10 @@ def _entry(root: str, browser_dir: str, filename: str, allow_external: bool) -> 
 
 def _base_path(server, request: web.Request) -> str:
     base = server._web_base_path()
-    return base if base and request.path.startswith(base + "/") else ""
+    public = server._public_web_base_path(request)
+    if (base and request.path.startswith(base + "/")) or (public and request.path.startswith(public + "/")):
+        return public
+    return ""
 
 
 def is_resource_request(path: str, base: str) -> bool:
@@ -97,13 +104,12 @@ def register(app: web.Application, server) -> None:
             session, workspace_relative=workspace_relative, expected_directory=request.query.get("expected_directory"),
         )
         root, relative = _entry(workspace, browser_dir, filename, CAP_ADMIN_OPS in auth.capabilities and not workspace_relative)
-        # Verify real size and readability before issuing a ticket.
-        await asyncio.to_thread(read_resource, root, relative)
+        site = await asyncio.to_thread(find_site_directory, root, relative)
         if _scope(server, alias, auth.user_id, agent_id)[0] != identity:
             raise WebApiError(410, "preview_scope_changed", "预览工作区已改变")
         preview = server.html_preview_store.create(
             owner=(auth.account_id, auth.user_id), alias=alias, agent_id=agent_id,
-            identity=identity, root=root, entry_path=relative,
+            identity=identity, root=root, entry_path=relative, site_directory=site,
         )
         return web.json_response({"ok": True, "data": {
             "session_id": preview.session_id, "entry_url": entry_url(preview, _base_path(server, request)),
@@ -132,18 +138,22 @@ def register(app: web.Application, server) -> None:
                 raise WebApiError(410, "preview_scope_changed", "预览工作区已改变，请重新打开") from exc
 
         validate_scope()
-        data, mime = await asyncio.to_thread(read_resource, preview.root, request.match_info["path"])
+        path = request.match_info["path"]
+        prefix = resource_prefix(_base_path(server, request), preview.session_id)
+        original_css = ORIGINAL_CSS_PARAM in request.query
+        data, mime, redirect = await asyncio.to_thread(preview_resource, preview, path, prefix, original_css=original_css)
         # Revocation, expiration and workspace changes also win over in-flight IO.
         server.html_preview_store.get(preview.session_id)
         validate_scope()
-        prefix = resource_prefix(_base_path(server, request), preview.session_id)
-        if mime in {"text/html", "application/xhtml+xml"}:
-            data = inject_bridge(data, preview, prefix, xhtml=mime == "application/xhtml+xml")
         headers = security_headers(request.host, prefix)
+        if redirect:
+            query = request.rel_url.raw_query_string
+            headers["Location"] = prefix + quote(path, safe="/") + "/" + ("?" + query if query else "")
+            return web.Response(status=302, headers=headers)
         textual = mime.startswith("text/") or mime in {"application/json", "application/xhtml+xml"}
         response = web.Response(
             body=data if request.method != "HEAD" else b"", content_type=mime,
-            charset="utf-8" if textual else None, headers=headers,
+            charset="utf-8" if textual and not (original_css and mime == "text/css") else None, headers=headers,
         )
         response.headers["Content-Length"] = str(len(data))
         return response

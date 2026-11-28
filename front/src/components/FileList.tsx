@@ -46,7 +46,7 @@ export function FileList({ files, onDirClick, onFileClick, onEdit, onRename, onC
   }, [openActionsFor]);
 
   if (files.length === 0) {
-    return <div className="text-center text-[var(--muted)] py-8">目录为空</div>;
+    return <div className="py-4 text-center text-[var(--muted)]">目录为空</div>;
   }
 
   return (
@@ -60,12 +60,12 @@ export function FileList({ files, onDirClick, onFileClick, onEdit, onRename, onC
         const canDelete = allowDelete && Boolean(onDelete);
         const hasActions = canEdit || canRename || canCompress || canDownload || canDelete;
 
-        return <li key={file.name} className={`relative flex items-center gap-1 p-1 ${actionsOpen ? "z-20" : ""}`}>
+        return <li key={file.name} className={`relative flex items-center gap-0.5 px-1 ${actionsOpen ? "z-20" : ""}`}>
           <button
             type="button"
             aria-label={`${file.isDir ? "进入" : "打开"} ${file.name}`}
             onClick={() => file.isDir ? onDirClick(file.name) : onFileClick(file.name)}
-            className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-[var(--workbench-hover-bg)] active:bg-[var(--workbench-active-bg)]"
+            className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md p-1.5 text-left text-sm transition-colors hover:bg-[var(--workbench-hover-bg)] active:bg-[var(--workbench-active-bg)]"
           >
             {file.isDir ? (
               <FolderIcon kind={getFolderIconKind(file.name)} open={false} />
